@@ -140,3 +140,24 @@ This version separates read operations from transaction signing.
 - Technical error details can be expanded from the UI.
 
 For collections that require historical event scanning, an archive-capable RPC may be necessary.
+
+
+## v4 — contract-by-contract discovery
+
+Historical blockchain event scanning has been removed from the normal holdings-discovery workflow.
+
+### ERC-721 discovery order
+
+1. Detect ERC-721 with ERC-165 / behavior checks.
+2. Call `balanceOf(wallet)`.
+3. If `tokenOfOwnerByIndex(wallet, index)` is supported, enumerate only the connected wallet's holdings directly from the collection contract.
+4. If owner enumeration is not supported, call `ownerOf(tokenId)` across a configurable token-ID range for that collection only.
+5. If IDs are sparse or unusual, use the Manual token IDs box.
+
+If `totalSupply()` is available, the UI can derive a default end of the token range. Users can override the start/end range when a collection starts at 1, has reserved IDs, gaps, or other non-standard behavior.
+
+### ERC-1155
+
+ERC-1155 does not define a standard method to enumerate every token ID owned by a wallet. v4 therefore does not scan historical logs. Use the Manual token IDs input; the app verifies each ID against the selected collection contract using `balanceOf(wallet, id)`.
+
+This keeps the tool RPC-friendly and avoids archive-node requirements.
