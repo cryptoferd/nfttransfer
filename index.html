@@ -295,7 +295,8 @@ const HELPER_ABI = [
 ];
 const EXPECTED_MAGIC = ethers.id("EVM_NFT_BULK_SENDER_V1");
 
-\nconst READ_RPC_PRESETS = {
+
+const READ_RPC_PRESETS = {
   4663: "https://rpc.mainnet.chain.robinhood.com",
   1: "https://ethereum-rpc.publicnode.com",
   10: "https://optimism-rpc.publicnode.com",
@@ -306,7 +307,34 @@ const EXPECTED_MAGIC = ethers.id("EVM_NFT_BULK_SENDER_V1");
   43114: "https://avalanche-c-chain-rpc.publicnode.com"
 };
 
-const CHAIN_INFO = {\n  1:{name:"Ethereum",explorer:"https://etherscan.io"},\n  10:{name:"Optimism",explorer:"https://optimistic.etherscan.io"},\n  56:{name:"BNB Smart Chain",explorer:"https://bscscan.com"},\n  100:{name:"Gnosis",explorer:"https://gnosisscan.io"},\n  137:{name:"Polygon",explorer:"https://polygonscan.com"},\n  8453:{name:"Base",explorer:"https://basescan.org"},\n  42161:{name:"Arbitrum One",explorer:"https://arbiscan.io"},\n  43114:{name:"Avalanche C-Chain",explorer:"https://snowtrace.io"},\n  59144:{name:"Linea",explorer:"https://lineascan.build"},\n  534352:{name:"Scroll",explorer:"https://scrollscan.com"},\n  4663:{name:"Robinhood Chain",explorer:"https://explorer.mainnet.chain.robinhood.com"}\n};\nfunction chainInfo(){return CHAIN_INFO[chainId]||{name:`Chain ${chainId}`,explorer:null};}\nfunction explorerTx(hash){const b=chainInfo().explorer;return b?`${b}/tx/${hash}`:null;}\nfunction normalizeContentURI(uri,tokenId=null){\n  if(!uri)return null; let u=String(uri).trim();\n  if(tokenId!==null)u=u.replaceAll("{id}",BigInt(tokenId).toString(16).padStart(64,"0"));\n  if(u.startsWith("ipfs://ipfs/"))u="https://ipfs.io/ipfs/"+u.slice(12);\n  else if(u.startsWith("ipfs://"))u="https://ipfs.io/ipfs/"+u.slice(7);\n  else if(u.startsWith("ar://"))u="https://arweave.net/"+u.slice(5);\n  return u;\n}\nasync function fetchJSON(uri){const r=await fetch(normalizeContentURI(uri),{cache:"force-cache"});if(!r.ok)throw new Error(`Metadata HTTP ${r.status}`);return await r.json();}\nfunction resolveImage(meta){return meta?normalizeContentURI(meta.image||meta.image_url||meta.imageUrl||null):null;}\nfunction saveURLState(){const u=new URL(location.href);const c=el("collection")?.value?.trim();if(c&&validAddress(c))u.searchParams.set("collection",c);else u.searchParams.delete("collection");if(chainId)u.searchParams.set("chain",String(chainId));history.replaceState({},"",u);}\nfunction restoreURLState(){const u=new URL(location.href);const c=u.searchParams.get("collection");if(c)el("collection").value=c;}\n
+const CHAIN_INFO = {
+  1:{name:"Ethereum",explorer:"https://etherscan.io"},
+  10:{name:"Optimism",explorer:"https://optimistic.etherscan.io"},
+  56:{name:"BNB Smart Chain",explorer:"https://bscscan.com"},
+  100:{name:"Gnosis",explorer:"https://gnosisscan.io"},
+  137:{name:"Polygon",explorer:"https://polygonscan.com"},
+  8453:{name:"Base",explorer:"https://basescan.org"},
+  42161:{name:"Arbitrum One",explorer:"https://arbiscan.io"},
+  43114:{name:"Avalanche C-Chain",explorer:"https://snowtrace.io"},
+  59144:{name:"Linea",explorer:"https://lineascan.build"},
+  534352:{name:"Scroll",explorer:"https://scrollscan.com"},
+  4663:{name:"Robinhood Chain",explorer:"https://explorer.mainnet.chain.robinhood.com"}
+};
+function chainInfo(){return CHAIN_INFO[chainId]||{name:`Chain ${chainId}`,explorer:null};}
+function explorerTx(hash){const b=chainInfo().explorer;return b?`${b}/tx/${hash}`:null;}
+function normalizeContentURI(uri,tokenId=null){
+  if(!uri)return null; let u=String(uri).trim();
+  if(tokenId!==null)u=u.replaceAll("{id}",BigInt(tokenId).toString(16).padStart(64,"0"));
+  if(u.startsWith("ipfs://ipfs/"))u="https://ipfs.io/ipfs/"+u.slice(12);
+  else if(u.startsWith("ipfs://"))u="https://ipfs.io/ipfs/"+u.slice(7);
+  else if(u.startsWith("ar://"))u="https://arweave.net/"+u.slice(5);
+  return u;
+}
+async function fetchJSON(uri){const r=await fetch(normalizeContentURI(uri),{cache:"force-cache"});if(!r.ok)throw new Error(`Metadata HTTP ${r.status}`);return await r.json();}
+function resolveImage(meta){return meta?normalizeContentURI(meta.image||meta.image_url||meta.imageUrl||null):null;}
+function saveURLState(){const u=new URL(location.href);const c=el("collection")?.value?.trim();if(c&&validAddress(c))u.searchParams.set("collection",c);else u.searchParams.delete("collection");if(chainId)u.searchParams.set("chain",String(chainId));history.replaceState({},"",u);}
+function restoreURLState(){const u=new URL(location.href);const c=u.searchParams.get("collection");if(c)el("collection").value=c;}
+
 const el = id => document.getElementById(id);
 let provider, readProvider, signer, account, chainId, standard = null, collectionContract = null;
 let holdings = [];
@@ -610,7 +638,24 @@ async function scanERC1155(address){
   }
   return owned;
 }
-\nasync function enrichMetadata(address){\n  let cursor=0;\n  async function one(item){\n    try{\n      let uri;\n      if(standard==="ERC721") uri=await new ethers.Contract(address,ERC721_ABI,provider).tokenURI(item.id);\n      else {uri=await new ethers.Contract(address,ERC1155_ABI,provider).uri(item.id);uri=normalizeContentURI(uri,item.id);}\n      item.tokenURI=normalizeContentURI(uri,standard==="ERC1155"?item.id:null);\n      if(!item.tokenURI)return;\n      const meta=await fetchJSON(item.tokenURI);\n      item.name=meta?.name||`Token #${item.id}`; item.image=resolveImage(meta);\n    }catch{item.name=item.name||`Token #${item.id}`;}\n  }\n  const workers=Array.from({length:Math.min(8,holdings.length)},async()=>{while(cursor<holdings.length){const i=cursor++;await one(holdings[i]);renderHoldings();}});\n  await Promise.all(workers);\n}\n
+
+async function enrichMetadata(address){
+  let cursor=0;
+  async function one(item){
+    try{
+      let uri;
+      if(standard==="ERC721") uri=await new ethers.Contract(address,ERC721_ABI,rp()).tokenURI(item.id);
+      else {uri=await new ethers.Contract(address,ERC1155_ABI,rp()).uri(item.id);uri=normalizeContentURI(uri,item.id);}
+      item.tokenURI=normalizeContentURI(uri,standard==="ERC1155"?item.id:null);
+      if(!item.tokenURI)return;
+      const meta=await fetchJSON(item.tokenURI);
+      item.name=meta?.name||`Token #${item.id}`; item.image=resolveImage(meta);
+    }catch{item.name=item.name||`Token #${item.id}`;}
+  }
+  const workers=Array.from({length:Math.min(8,holdings.length)},async()=>{while(cursor<holdings.length){const i=cursor++;await one(holdings[i]);renderHoldings();}});
+  await Promise.all(workers);
+}
+
 function renderHoldings(){
   const grid = el("tokenGrid"); grid.innerHTML = "";
   for (const item of holdings){
