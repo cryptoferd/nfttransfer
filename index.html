@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>EVM NFT Bulk Transfer</title>
+  <style>
+    :root {
+      --bg: #080b10;
+      --panel: #0f141c;
+      --panel2: #141b25;
+      --border: #263140;
+      --text: #edf4ff;
+      --muted: #8fa0b7;
+      --accent: #58a6ff;
+      --accent2: #7ee787;
+      --warn: #e3b341;
+      --danger: #ff7b72;
+      --shadow: 0 18px 48px rgba(0,0,0,.34);
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(88,166,255,.10), transparent 32rem),
+        radial-gradient(circle at 100% 0%, rgba(126,231,135,.06), transparent 30rem),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+    }
+    .wrap { width: min(1180px, calc(100% - 28px)); margin: 0 auto; padding: 34px 0 72px; }
+    .hero {
+      display: flex; gap: 20px; align-items: flex-end; justify-content: space-between;
+      margin-bottom: 22px;
+    }
+    h1 { margin: 0; font-size: clamp(28px, 5vw, 48px); letter-spacing: -.04em; line-height: 1; }
+    .sub { color: var(--muted); margin-top: 10px; max-width: 750px; line-height: 1.55; }
+    .badge {
+      border: 1px solid var(--border); color: var(--muted); background: rgba(15,20,28,.78);
+      border-radius: 999px; padding: 8px 12px; white-space: nowrap; font-size: 12px;
+    }
+    .grid { display: grid; grid-template-columns: 1.02fr .98fr; gap: 18px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .hero { align-items:flex-start; flex-direction:column; } }
+    .card {
+      background: linear-gradient(180deg, rgba(20,27,37,.96), rgba(15,20,28,.98));
+      border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+      padding: 18px;
+    }
+    .card h2 { font-size: 16px; margin: 0 0 14px; letter-spacing: -.01em; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media(max-width: 620px){ .row { grid-template-columns: 1fr; } }
+    label { display: block; color: var(--muted); font-size: 12px; font-weight: 650; margin-bottom: 6px; }
+    input, textarea, select {
+      width: 100%; background: #0b1017; border: 1px solid var(--border); color: var(--text);
+      border-radius: 10px; padding: 11px 12px; outline: none; font: inherit;
+    }
+    input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.10); }
+    textarea { min-height: 86px; resize: vertical; }
+    .field { margin-bottom: 12px; }
+    button {
+      appearance: none; border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px;
+      font-weight: 750; cursor: pointer; color: var(--text); background: #17202b;
+    }
+    button:hover:not(:disabled) { filter: brightness(1.10); }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    button.primary { background: linear-gradient(180deg, #2384e8, #1669bd); border-color: #2e92f4; }
+    button.good { background: linear-gradient(180deg, #238636, #1f6f2e); border-color: #2ea043; }
+    button.danger { background: linear-gradient(180deg, #b33b34, #842b27); border-color: #db5a51; }
+    button.ghost { background: transparent; }
+    .buttons { display:flex; flex-wrap:wrap; gap:8px; }
+    .status {
+      margin-top: 12px; padding: 11px 12px; border-radius: 10px; border:1px solid var(--border);
+      background:#0b1017; color:var(--muted); font-size:13px; line-height:1.5; min-height:44px; white-space:pre-wrap;
+      overflow-wrap:anywhere;
+    }
+    .status.ok { border-color:rgba(46,160,67,.7); color:#a9e7b3; }
+    .status.warn { border-color:rgba(227,179,65,.6); color:#f2cf73; }
+    .status.err { border-color:rgba(255,123,114,.6); color:#ffaaa4; }
+    .statline { display:flex; flex-wrap:wrap; gap:8px; margin: 12px 0 2px; }
+    .pill { border:1px solid var(--border); background:#0b1017; color:var(--muted); border-radius:999px; padding:6px 9px; font-size:12px; }
+    .pill strong { color:var(--text); }
+    .holdings { margin-top:18px; }
+    .holdingsHead { display:flex; justify-content:space-between; gap:10px; align-items:center; margin-bottom:10px; }
+    .tokenGrid { display:grid; grid-template-columns: repeat(auto-fill,minmax(150px,1fr)); gap:10px; max-height:500px; overflow:auto; padding-right:4px; }
+    .token {
+      position:relative; border:1px solid var(--border); background:#0b1017; border-radius:12px; padding:12px;
+      cursor:pointer; min-height:88px; display:flex; flex-direction:column; justify-content:space-between; gap:9px;
+    }
+    .token.selected { border-color:var(--accent); box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px rgba(88,166,255,.07); }
+    .token input[type=checkbox] { width:17px; height:17px; position:absolute; right:10px; top:10px; accent-color:var(--accent); }
+    .tokenId { font-size:15px; font-weight:800; padding-right:24px; word-break:break-all; }
+    .tokenMeta { color:var(--muted); font-size:11px; line-height:1.4; }
+    .amount { margin-top:4px; }
+    .amount input { padding:7px 8px; font-size:12px; }
+    .warning {
+      border-left:3px solid var(--warn); background:rgba(227,179,65,.07); padding:10px 12px; border-radius:8px;
+      color:#d6c18a; font-size:12px; line-height:1.45; margin:10px 0 0;
+    }
+    .success {
+      border-left:3px solid var(--accent2); background:rgba(126,231,135,.06); padding:10px 12px; border-radius:8px;
+      color:#b8e8c1; font-size:12px; line-height:1.45; margin:10px 0 0;
+    }
+    .sep { height:1px; background:var(--border); margin:16px 0; }
+    details { border:1px solid var(--border); border-radius:12px; background:#0b1017; padding:11px 12px; }
+    summary { cursor:pointer; font-weight:750; font-size:13px; }
+    details p, details li { color:var(--muted); font-size:12px; line-height:1.55; }
+    code { color:#b7d9ff; background:#0a0e14; padding:2px 5px; border-radius:5px; }
+    .footer { color:var(--muted); font-size:11px; line-height:1.5; margin-top:18px; text-align:center; }
+    .hidden { display:none !important; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <h1>EVM NFT Bulk Transfer</h1>
+      <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
+    </div>
+    <div class="badge">Static app · client-side only</div>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>1. Connect & load collection</h2>
+      <div class="buttons">
+        <button id="connectBtn" class="primary">Connect Wallet</button>
+        <button id="refreshBtn" disabled>Refresh Network</button>
+      </div>
+      <div class="statline">
+        <div class="pill">Wallet: <strong id="walletStat">Not connected</strong></div>
+        <div class="pill">Chain: <strong id="chainStat">—</strong></div>
+      </div>
+
+      <div class="sep"></div>
+
+      <div class="field">
+        <label for="collection">Collection contract address</label>
+        <input id="collection" class="mono" placeholder="0x..." autocomplete="off" />
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="startBlock">Event scan start block</label>
+          <input id="startBlock" type="number" min="0" step="1" value="0" />
+        </div>
+        <div class="field">
+          <label for="chunkSize">Initial scan chunk size</label>
+          <input id="chunkSize" type="number" min="100" step="100" value="20000" />
+        </div>
+      </div>
+
+      <div class="buttons">
+        <button id="loadBtn" class="primary" disabled>Detect & Load Holdings</button>
+        <button id="cancelScanBtn" class="danger hidden">Cancel Scan</button>
+      </div>
+      <div id="loadStatus" class="status">Connect a wallet, then enter a collection address.</div>
+
+      <details style="margin-top:12px">
+        <summary>Manual token IDs / fallback</summary>
+        <p>Useful if the RPC blocks large event scans or the collection is non-standard. ERC-721 IDs will be verified against <code>ownerOf</code>. ERC-1155 IDs will be checked with <code>balanceOf</code>.</p>
+        <div class="field">
+          <label for="manualIds">Token IDs (comma, space, or newline separated)</label>
+          <textarea id="manualIds" class="mono" placeholder="1, 2, 17, 2048"></textarea>
+        </div>
+        <button id="manualBtn" disabled>Load These IDs</button>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>2. Destination & transfer mode</h2>
+      <div class="field">
+        <label for="recipient">Destination wallet</label>
+        <input id="recipient" class="mono" placeholder="0x..." autocomplete="off" />
+      </div>
+
+      <div id="standardInfo" class="status">Token standard will appear after loading a collection.</div>
+
+      <div id="erc721Controls" class="hidden">
+        <div class="sep"></div>
+        <label>ERC-721 transfer mode</label>
+        <select id="erc721Mode">
+          <option value="direct">Direct — one wallet transaction per NFT</option>
+          <option value="helper">Batch helper — one approval + one batch transaction</option>
+        </select>
+
+        <div id="helperControls" class="hidden" style="margin-top:12px">
+          <div class="field">
+            <label for="helperAddress">Deployed BatchNFTSender helper address</label>
+            <input id="helperAddress" class="mono" placeholder="0x..." autocomplete="off" />
+          </div>
+          <div class="buttons">
+            <button id="verifyHelperBtn">Verify Helper</button>
+            <button id="approveHelperBtn" disabled>Approve Helper</button>
+          </div>
+          <div class="warning">Only use a helper contract you deployed yourself or independently verified. <code>setApprovalForAll</code> gives that helper permission to move every NFT you own in this collection until you revoke it.</div>
+        </div>
+      </div>
+
+      <div id="erc1155Controls" class="hidden">
+        <div class="success">ERC-1155 supports <code>safeBatchTransferFrom</code> natively, so selected IDs can normally be sent in one transaction without a helper contract.</div>
+      </div>
+
+      <div class="sep"></div>
+      <div class="buttons">
+        <button id="simulateBtn" disabled>Preflight Selected</button>
+        <button id="transferBtn" class="good" disabled>Transfer Selected</button>
+      </div>
+      <div id="transferStatus" class="status">Nothing selected yet.</div>
+
+      <details style="margin-top:12px">
+        <summary>Safety notes</summary>
+        <ul>
+          <li>Transactions are irreversible. Verify the destination address and network before signing.</li>
+          <li>Test with one low-value NFT first when using an unfamiliar collection or chain.</li>
+          <li>This page never asks for a seed phrase or private key. Your wallet signs transactions.</li>
+          <li>Non-standard, soulbound, paused, or transfer-restricted NFTs may revert.</li>
+        </ul>
+      </details>
+    </section>
+  </div>
+
+  <section class="card holdings">
+    <div class="holdingsHead">
+      <div>
+        <h2 style="margin-bottom:4px">3. Holdings</h2>
+        <div id="collectionMeta" style="font-size:12px;color:var(--muted)">No collection loaded.</div>
+      </div>
+      <div class="buttons">
+        <button id="selectAllBtn" disabled>Select All</button>
+        <button id="clearBtn" disabled>Clear</button>
+      </div>
+    </div>
+    <div id="tokenGrid" class="tokenGrid"></div>
+  </section>
+
+  <div class="footer">
+    Open-source local utility. It does not custody assets and does not guarantee compatibility with every custom NFT contract or RPC provider.
+  </div>
+</div>
+
+<script type="module">
+import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@6.17.0/+esm";
+
+const ERC165_ABI = ["function supportsInterface(bytes4 interfaceId) view returns (bool)"];
+const ERC721_ABI = [
+  "function name() view returns (string)",
+  "function symbol() view returns (string)",
+  "function balanceOf(address owner) view returns (uint256)",
+  "function ownerOf(uint256 tokenId) view returns (address)",
+  "function tokenOfOwnerByIndex(address owner,uint256 index) view returns (uint256)",
+  "function safeTransferFrom(address from,address to,uint256 tokenId)",
+  "function setApprovalForAll(address operator,bool approved)",
+  "function isApprovedForAll(address owner,address operator) view returns (bool)",
+  "event Transfer(address indexed from,address indexed to,uint256 indexed tokenId)"
+];
+const ERC1155_ABI = [
+  "function balanceOf(address account,uint256 id) view returns (uint256)",
+  "function balanceOfBatch(address[] accounts,uint256[] ids) view returns (uint256[])",
+  "function safeBatchTransferFrom(address from,address to,uint256[] ids,uint256[] amounts,bytes data)",
+  "event TransferSingle(address indexed operator,address indexed from,address indexed to,uint256 id,uint256 value)",
+  "event TransferBatch(address indexed operator,address indexed from,address indexed to,uint256[] ids,uint256[] values)"
+];
+const HELPER_ABI = [
+  "function batchTransferERC721(address collection,address to,uint256[] tokenIds)",
+  "function MAGIC() view returns (bytes32)"
+];
+const EXPECTED_MAGIC = ethers.id("EVM_NFT_BULK_SENDER_V1");
+
+const el = id => document.getElementById(id);
+let provider, signer, account, chainId, standard = null, collectionContract = null;
+let holdings = [];
+let scanCancelled = false;
+let helperVerified = false;
+
+function short(a){ return a ? `${a.slice(0,6)}…${a.slice(-4)}` : "—"; }
+function setStatus(node, text, kind=""){
+  node.textContent = text;
+  node.className = "status" + (kind ? ` ${kind}` : "");
+}
+function validAddress(value){ try { return ethers.isAddress(value); } catch { return false; } }
+function topicAddress(address){ return ethers.zeroPadValue(address, 32); }
+function uniqBigints(values){
+  const seen = new Set(); const out = [];
+  for (const v of values) { const s = BigInt(v).toString(); if (!seen.has(s)) { seen.add(s); out.push(BigInt(s)); } }
+  return out;
+}
+function parseIds(text){
+  return uniqBigints(text.split(/[\s,;]+/).filter(Boolean).map(v => BigInt(v.trim())));
+}
+function enableConnected(on){
+  el("loadBtn").disabled = !on;
+  el("manualBtn").disabled = !on;
+  el("refreshBtn").disabled = !on;
+}
+function selectedItems(){ return holdings.filter(x => x.selected); }
+function updateTransferButtons(){
+  const n = selectedItems().length;
+  el("selectAllBtn").disabled = holdings.length === 0;
+  el("clearBtn").disabled = holdings.length === 0;
+  el("simulateBtn").disabled = n === 0 || !account;
+  el("transferBtn").disabled = n === 0 || !account;
+  if (n) setStatus(el("transferStatus"), `${n} token ID${n===1?"":"s"} selected.`);
+  else setStatus(el("transferStatus"), "Nothing selected yet.");
+}
+function resetCollection(){
+  holdings = []; standard = null; collectionContract = null; helperVerified = false;
+  el("tokenGrid").innerHTML = "";
+  el("collectionMeta").textContent = "No collection loaded.";
+  el("standardInfo").textContent = "Token standard will appear after loading a collection.";
+  el("erc721Controls").classList.add("hidden");
+  el("erc1155Controls").classList.add("hidden");
+  updateTransferButtons();
+}
+async function connect(){
+  if (!window.ethereum) throw new Error("No injected EVM wallet found. Install or open this page inside MetaMask, Rabby, Coinbase Wallet, etc.");
+  provider = new ethers.BrowserProvider(window.ethereum);
+  await provider.send("eth_requestAccounts", []);
+  signer = await provider.getSigner();
+  account = await signer.getAddress();
+  const network = await provider.getNetwork();
+  chainId = Number(network.chainId);
+  el("walletStat").textContent = short(account);
+  el("walletStat").title = account;
+  el("chainStat").textContent = `${network.name || "EVM"} (${chainId})`;
+  enableConnected(true);
+  setStatus(el("loadStatus"), `Connected: ${account}\nChain ID: ${chainId}`, "ok");
+}
+async function refreshNetwork(){
+  if (!window.ethereum) return;
+  provider = new ethers.BrowserProvider(window.ethereum);
+  signer = await provider.getSigner();
+  account = await signer.getAddress();
+  const network = await provider.getNetwork();
+  chainId = Number(network.chainId);
+  el("walletStat").textContent = short(account);
+  el("walletStat").title = account;
+  el("chainStat").textContent = `${network.name || "EVM"} (${chainId})`;
+  resetCollection();
+  setStatus(el("loadStatus"), `Network refreshed. Chain ID: ${chainId}`, "ok");
+}
+async function safeSupports(contractAddress, interfaceId){
+  try {
+    const c = new ethers.Contract(contractAddress, ERC165_ABI, provider);
+    return await c.supportsInterface(interfaceId);
+  } catch { return false; }
+}
+async function detectStandard(address){
+  // ERC-721 = 0x80ac58cd, ERC-1155 = 0xd9b67a26
+  const [is721, is1155] = await Promise.all([
+    safeSupports(address, "0x80ac58cd"),
+    safeSupports(address, "0xd9b67a26")
+  ]);
+  if (is721) return "ERC721";
+  if (is1155) return "ERC1155";
+
+  // Conservative behavior fallback for contracts with broken ERC-165.
+  try {
+    const c = new ethers.Contract(address, ERC721_ABI, provider);
+    await c.balanceOf(account);
+    return "ERC721";
+  } catch {}
+  throw new Error("Could not identify this contract as ERC-721 or ERC-1155. It may be non-standard or the RPC call may have failed.");
+}
+async function tryCollectionName(address, type){
+  if (type !== "ERC721") return "ERC-1155 Collection";
+  const c = new ethers.Contract(address, ERC721_ABI, provider);
+  let name = "ERC-721 Collection", symbol = "";
+  try { name = await c.name(); } catch {}
+  try { symbol = await c.symbol(); } catch {}
+  return symbol ? `${name} (${symbol})` : name;
+}
+async function loadERC721Enumerable(address){
+  const c = new ethers.Contract(address, ERC721_ABI, provider);
+  const bal = await c.balanceOf(account);
+  const count = Number(bal);
+  if (count === 0) return {supported:true, ids:[]};
+  // Probe enumerable extension using first item.
+  let first;
+  try { first = await c.tokenOfOwnerByIndex(account, 0); }
+  catch { return {supported:false, ids:[]}; }
+  const ids = [BigInt(first)];
+  const batch = 15;
+  for (let i=1; i<count; i+=batch) {
+    const jobs = [];
+    for (let j=i; j<Math.min(i+batch,count); j++) jobs.push(c.tokenOfOwnerByIndex(account, j));
+    const vals = await Promise.all(jobs);
+    ids.push(...vals.map(BigInt));
+    setStatus(el("loadStatus"), `Enumerable collection detected. Reading token ${Math.min(i+batch,count)} of ${count}…`, "ok");
+  }
+  return {supported:true, ids:uniqBigints(ids)};
+}
+async function getLogsAdaptive(baseFilter, start, end, initialChunk, onProgress){
+  let cursor = start;
+  let chunk = Math.max(100, initialChunk);
+  const logs = [];
+  while (cursor <= end) {
+    if (scanCancelled) throw new Error("Scan cancelled.");
+    const toBlock = Math.min(end, cursor + chunk - 1);
+    try {
+      const part = await provider.getLogs({...baseFilter, fromBlock: cursor, toBlock});
+      logs.push(...part);
+      cursor = toBlock + 1;
+      onProgress?.(cursor, end, chunk, logs.length);
+      if (part.length < 200 && chunk < initialChunk) chunk = Math.min(initialChunk, chunk * 2);
+    } catch (e) {
+      if (chunk <= 100) throw e;
+      chunk = Math.max(100, Math.floor(chunk / 2));
+      onProgress?.(cursor, end, chunk, logs.length);
+    }
+  }
+  return logs;
+}
+async function scanERC721(address){
+  const latest = await provider.getBlockNumber();
+  const start = Math.max(0, Number(el("startBlock").value || 0));
+  const chunk = Math.max(100, Number(el("chunkSize").value || 20000));
+  if (start > latest) throw new Error(`Start block ${start} is above current block ${latest}.`);
+  const iface = new ethers.Interface(ERC721_ABI);
+  const sig = iface.getEvent("Transfer").topicHash;
+  const acctTopic = topicAddress(account);
+  const progress = (cursor,end,size,count) => setStatus(el("loadStatus"),
+    `Scanning Transfer events…\nBlocks ${start.toLocaleString()} → ${end.toLocaleString()}\nReached ${Math.min(cursor,end).toLocaleString()} · chunk ${size.toLocaleString()} · ${count} matching logs`, "warn");
+
+  const inbound = await getLogsAdaptive({address, topics:[sig, null, acctTopic]}, start, latest, chunk, progress);
+  const outbound = await getLogsAdaptive({address, topics:[sig, acctTopic]}, start, latest, chunk, progress);
+  const candidates = uniqBigints([...inbound, ...outbound].map(log => BigInt(log.topics[3])));
+  const c = new ethers.Contract(address, ERC721_ABI, provider);
+  const owned = [];
+  for (let i=0;i<candidates.length;i+=12){
+    const slice = candidates.slice(i,i+12);
+    const checks = await Promise.all(slice.map(async id => {
+      try { return (await c.ownerOf(id)).toLowerCase() === account.toLowerCase() ? id : null; }
+      catch { return null; }
+    }));
+    owned.push(...checks.filter(v => v !== null));
+    setStatus(el("loadStatus"), `Verifying current ownership… ${Math.min(i+12,candidates.length)} / ${candidates.length}`, "warn");
+  }
+  return owned;
+}
+async function scanERC1155(address){
+  const latest = await provider.getBlockNumber();
+  const start = Math.max(0, Number(el("startBlock").value || 0));
+  const chunk = Math.max(100, Number(el("chunkSize").value || 20000));
+  const iface = new ethers.Interface(ERC1155_ABI);
+  const singleSig = iface.getEvent("TransferSingle").topicHash;
+  const batchSig = iface.getEvent("TransferBatch").topicHash;
+  const acct = topicAddress(account);
+  const candidates = [];
+  let totalLogs = 0;
+  const progress = (cursor,end,size,count) => setStatus(el("loadStatus"),
+    `Scanning ERC-1155 transfer events…\nReached ${Math.min(cursor,end).toLocaleString()} / ${end.toLocaleString()} · chunk ${size.toLocaleString()} · matched ${totalLogs + count} logs`, "warn");
+
+  const filters = [
+    {topics:[singleSig,null,acct]}, {topics:[singleSig,null,null,acct]},
+    {topics:[batchSig,null,acct]}, {topics:[batchSig,null,null,acct]}
+  ];
+  for (const f of filters){
+    const logs = await getLogsAdaptive({address, ...f}, start, latest, chunk, progress);
+    totalLogs += logs.length;
+    for (const log of logs){
+      try {
+        const parsed = iface.parseLog(log);
+        if (parsed.name === "TransferSingle") candidates.push(BigInt(parsed.args.id));
+        else for (const id of parsed.args.ids) candidates.push(BigInt(id));
+      } catch {}
+    }
+  }
+  const ids = uniqBigints(candidates);
+  if (!ids.length) return [];
+  const c = new ethers.Contract(address, ERC1155_ABI, provider);
+  const owned = [];
+  for (let i=0;i<ids.length;i+=80){
+    const slice = ids.slice(i,i+80);
+    let balances;
+    try {
+      balances = await c.balanceOfBatch(slice.map(()=>account), slice);
+    } catch {
+      balances = await Promise.all(slice.map(id => c.balanceOf(account,id)));
+    }
+    slice.forEach((id,j) => { if (BigInt(balances[j]) > 0n) owned.push({id, balance:BigInt(balances[j])}); });
+    setStatus(el("loadStatus"), `Checking current ERC-1155 balances… ${Math.min(i+80,ids.length)} / ${ids.length}`, "warn");
+  }
+  return owned;
+}
+function renderHoldings(){
+  const grid = el("tokenGrid"); grid.innerHTML = "";
+  for (const item of holdings){
+    const div = document.createElement("div");
+    div.className = "token" + (item.selected ? " selected" : "");
+    div.innerHTML = `
+      <input type="checkbox" ${item.selected?"checked":""} aria-label="Select token ${item.id}">
+      <div class="tokenId">#${item.id}</div>
+      <div class="tokenMeta">${standard === "ERC1155" ? `Balance: ${item.balance}` : "ERC-721"}</div>
+      ${standard === "ERC1155" ? `<div class="amount"><label>Send amount</label><input type="number" min="1" max="${item.balance}" value="${item.amount ?? item.balance}" data-amount></div>` : ""}
+    `;
+    const checkbox = div.querySelector('input[type="checkbox"]');
+    checkbox.addEventListener("click", e => e.stopPropagation());
+    checkbox.addEventListener("change", () => {
+      item.selected = checkbox.checked; div.classList.toggle("selected", item.selected); updateTransferButtons();
+    });
+    div.addEventListener("click", e => {
+      if (e.target.matches("[data-amount]") || e.target.tagName === "LABEL") return;
+      item.selected = !item.selected; checkbox.checked = item.selected; div.classList.toggle("selected", item.selected); updateTransferButtons();
+    });
+    const amount = div.querySelector("[data-amount]");
+    if (amount) amount.addEventListener("input", () => item.amount = BigInt(amount.value || 0));
+    grid.appendChild(div);
+  }
+  el("selectAllBtn").disabled = holdings.length === 0;
+  el("clearBtn").disabled = holdings.length === 0;
+  updateTransferButtons();
+}
+async function loadCollection(){
+  if (!provider || !account) return;
+  const address = el("collection").value.trim();
+  if (!validAddress(address)) throw new Error("Enter a valid collection contract address.");
+  const code = await provider.getCode(address);
+  if (code === "0x") throw new Error("No contract bytecode found at that address on the connected chain.");
+
+  resetCollection();
+  scanCancelled = false;
+  el("cancelScanBtn").classList.remove("hidden");
+  setStatus(el("loadStatus"), "Detecting NFT standard…");
+
+  standard = await detectStandard(address);
+  const title = await tryCollectionName(address, standard);
+  el("collectionMeta").textContent = `${title} · ${address}`;
+  el("standardInfo").textContent = `${standard} detected on chain ID ${chainId}.`;
+  el("standardInfo").className = "status ok";
+
+  if (standard === "ERC721"){
+    collectionContract = new ethers.Contract(address, ERC721_ABI, signer);
+    el("erc721Controls").classList.remove("hidden");
+    el("erc1155Controls").classList.add("hidden");
+    const enumerable = await loadERC721Enumerable(address);
+    let ids;
+    if (enumerable.supported) {
+      ids = enumerable.ids;
+      setStatus(el("loadStatus"), `Loaded ${ids.length} ERC-721 holding${ids.length===1?"":"s"} using ERC-721 Enumerable.`, "ok");
+    } else {
+      setStatus(el("loadStatus"), "Collection is not ERC-721 Enumerable. Falling back to Transfer-event scan…", "warn");
+      ids = await scanERC721(address);
+      setStatus(el("loadStatus"), `Event scan complete. Found ${ids.length} currently-owned ERC-721 token${ids.length===1?"":"s"}.`, "ok");
+    }
+    holdings = ids.sort((a,b)=>a<b?-1:a>b?1:0).map(id=>({id,selected:false}));
+  } else {
+    collectionContract = new ethers.Contract(address, ERC1155_ABI, signer);
+    el("erc1155Controls").classList.remove("hidden");
+    el("erc721Controls").classList.add("hidden");
+    const items = await scanERC1155(address);
+    holdings = items.sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0).map(x=>({...x,amount:x.balance,selected:false}));
+    setStatus(el("loadStatus"), `Event scan complete. Found ${holdings.length} ERC-1155 token ID${holdings.length===1?"":"s"} with a non-zero balance.`, "ok");
+  }
+  el("cancelScanBtn").classList.add("hidden");
+  renderHoldings();
+}
+async function loadManual(){
+  if (!provider || !account) return;
+  const address = el("collection").value.trim();
+  if (!validAddress(address)) throw new Error("Enter a valid collection address first.");
+  const ids = parseIds(el("manualIds").value);
+  if (!ids.length) throw new Error("Enter at least one token ID.");
+  const code = await provider.getCode(address);
+  if (code === "0x") throw new Error("No contract found at that address on this chain.");
+
+  if (!standard) standard = await detectStandard(address);
+  const title = await tryCollectionName(address, standard);
+  el("collectionMeta").textContent = `${title} · ${address}`;
+  el("standardInfo").textContent = `${standard} detected on chain ID ${chainId}.`;
+  el("standardInfo").className = "status ok";
+
+  if (standard === "ERC721"){
+    collectionContract = new ethers.Contract(address, ERC721_ABI, signer);
+    el("erc721Controls").classList.remove("hidden");
+    const verified = [];
+    for (let i=0;i<ids.length;i+=12){
+      const slice = ids.slice(i,i+12);
+      const checks = await Promise.all(slice.map(async id => {
+        try { return (await collectionContract.ownerOf(id)).toLowerCase() === account.toLowerCase() ? id : null; } catch { return null; }
+      }));
+      verified.push(...checks.filter(v=>v!==null));
+    }
+    holdings = uniqBigints([...(holdings.map(x=>x.id)), ...verified]).sort((a,b)=>a<b?-1:a>b?1:0).map(id=>({id,selected:false}));
+    setStatus(el("loadStatus"), `Verified ${verified.length} of ${ids.length} supplied ERC-721 IDs as owned by this wallet.`, "ok");
+  } else {
+    collectionContract = new ethers.Contract(address, ERC1155_ABI, signer);
+    el("erc1155Controls").classList.remove("hidden");
+    const balances = await Promise.all(ids.map(id=>collectionContract.balanceOf(account,id)));
+    const items = ids.map((id,i)=>({id,balance:BigInt(balances[i])})).filter(x=>x.balance>0n);
+    const merged = new Map(holdings.map(x=>[x.id.toString(),x]));
+    for (const x of items) merged.set(x.id.toString(), {...x,amount:x.balance,selected:false});
+    holdings = [...merged.values()].sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
+    setStatus(el("loadStatus"), `Verified ${items.length} of ${ids.length} supplied ERC-1155 IDs with a non-zero balance.`, "ok");
+  }
+  renderHoldings();
+}
+async function verifyHelper(){
+  const addr = el("helperAddress").value.trim();
+  if (!validAddress(addr)) throw new Error("Enter a valid helper contract address.");
+  const code = await provider.getCode(addr);
+  if (code === "0x") throw new Error("No contract is deployed at this helper address on the connected chain.");
+  const h = new ethers.Contract(addr, HELPER_ABI, provider);
+  let magic;
+  try { magic = await h.MAGIC(); } catch { throw new Error("Helper does not expose the expected MAGIC() identifier."); }
+  if (magic.toLowerCase() !== EXPECTED_MAGIC.toLowerCase()) throw new Error("Helper MAGIC value does not match the included BatchNFTSender.sol contract.");
+  helperVerified = true;
+  const approved = await collectionContract.isApprovedForAll(account, addr);
+  el("approveHelperBtn").disabled = approved;
+  setStatus(el("transferStatus"), approved ? "Helper verified and already approved for this collection." : "Helper verified. Approval is still required.", approved?"ok":"warn");
+}
+async function approveHelper(){
+  const addr = el("helperAddress").value.trim();
+  if (!helperVerified) throw new Error("Verify the helper contract first.");
+  setStatus(el("transferStatus"), "Waiting for operator approval transaction…", "warn");
+  const tx = await collectionContract.setApprovalForAll(addr, true);
+  setStatus(el("transferStatus"), `Approval submitted:\n${tx.hash}\nWaiting for confirmation…`, "warn");
+  await tx.wait();
+  el("approveHelperBtn").disabled = true;
+  setStatus(el("transferStatus"), "Helper approved for this collection.", "ok");
+}
+function validateTransfer(){
+  const to = el("recipient").value.trim();
+  if (!validAddress(to)) throw new Error("Enter a valid destination wallet.");
+  if (to.toLowerCase() === account.toLowerCase()) throw new Error("Destination is the same as the connected wallet.");
+  const items = selectedItems();
+  if (!items.length) throw new Error("Select at least one token.");
+  if (standard === "ERC1155"){
+    for (const x of items){
+      const a = BigInt(x.amount ?? x.balance);
+      if (a <= 0n || a > BigInt(x.balance)) throw new Error(`Invalid amount for token #${x.id}.`);
+    }
+  }
+  return {to, items};
+}
+async function preflight(){
+  const {to, items} = validateTransfer();
+  setStatus(el("transferStatus"), "Running preflight checks…", "warn");
+  if (standard === "ERC721"){
+    const mode = el("erc721Mode").value;
+    if (mode === "direct"){
+      for (const item of items) {
+        const owner = await collectionContract.ownerOf(item.id);
+        if (owner.toLowerCase() !== account.toLowerCase()) throw new Error(`Token #${item.id} is no longer owned by the connected wallet.`);
+      }
+      setStatus(el("transferStatus"), `Preflight passed for ${items.length} ERC-721 token${items.length===1?"":"s"}.\nDirect mode will request ${items.length} separate wallet transaction${items.length===1?"":"s"}.`, "ok");
+    } else {
+      if (!helperVerified) throw new Error("Verify the helper contract before using batch-helper mode.");
+      const helper = el("helperAddress").value.trim();
+      const approved = await collectionContract.isApprovedForAll(account, helper);
+      if (!approved) throw new Error("The helper is not approved for this collection.");
+      const h = new ethers.Contract(helper, HELPER_ABI, signer);
+      await h.batchTransferERC721.staticCall(el("collection").value.trim(), to, items.map(x=>x.id));
+      const gas = await h.batchTransferERC721.estimateGas(el("collection").value.trim(), to, items.map(x=>x.id));
+      setStatus(el("transferStatus"), `Batch preflight passed for ${items.length} ERC-721 tokens.\nEstimated gas units: ${gas}`, "ok");
+    }
+  } else {
+    const ids = items.map(x=>x.id), amounts = items.map(x=>BigInt(x.amount ?? x.balance));
+    await collectionContract.safeBatchTransferFrom.staticCall(account,to,ids,amounts,"0x");
+    const gas = await collectionContract.safeBatchTransferFrom.estimateGas(account,to,ids,amounts,"0x");
+    setStatus(el("transferStatus"), `ERC-1155 batch preflight passed for ${items.length} token IDs.\nEstimated gas units: ${gas}`, "ok");
+  }
+}
+async function transfer(){
+  const {to, items} = validateTransfer();
+  if (!confirm(`You are about to transfer ${items.length} selected token ID(s) to:\n\n${to}\n\nThis is irreversible. Continue?`)) return;
+
+  if (standard === "ERC721"){
+    const mode = el("erc721Mode").value;
+    if (mode === "direct"){
+      let completed = 0;
+      for (const item of items){
+        setStatus(el("transferStatus"), `Direct transfer ${completed+1} of ${items.length}: token #${item.id}\nConfirm in your wallet…`, "warn");
+        const tx = await collectionContract["safeTransferFrom(address,address,uint256)"](account,to,item.id);
+        setStatus(el("transferStatus"), `Token #${item.id} submitted:\n${tx.hash}\nWaiting for confirmation…`, "warn");
+        await tx.wait();
+        completed++;
+        item._sent = true;
+      }
+      holdings = holdings.filter(x=>!x._sent);
+      renderHoldings();
+      setStatus(el("transferStatus"), `Complete. ${completed} ERC-721 token${completed===1?"":"s"} transferred.`, "ok");
+    } else {
+      if (!helperVerified) throw new Error("Verify the helper first.");
+      const helperAddr = el("helperAddress").value.trim();
+      const approved = await collectionContract.isApprovedForAll(account, helperAddr);
+      if (!approved) throw new Error("Approve the helper first.");
+      const h = new ethers.Contract(helperAddr, HELPER_ABI, signer);
+      setStatus(el("transferStatus"), `Submitting one batch transaction for ${items.length} ERC-721 tokens…`, "warn");
+      const tx = await h.batchTransferERC721(el("collection").value.trim(),to,items.map(x=>x.id));
+      setStatus(el("transferStatus"), `Batch submitted:\n${tx.hash}\nWaiting for confirmation…`, "warn");
+      await tx.wait();
+      const sent = new Set(items.map(x=>x.id.toString()));
+      holdings = holdings.filter(x=>!sent.has(x.id.toString()));
+      renderHoldings();
+      setStatus(el("transferStatus"), `Batch complete. ${items.length} ERC-721 tokens transferred in one batch call.`, "ok");
+    }
+  } else {
+    const ids = items.map(x=>x.id), amounts = items.map(x=>BigInt(x.amount ?? x.balance));
+    setStatus(el("transferStatus"), `Submitting ERC-1155 batch for ${items.length} token IDs…`, "warn");
+    const tx = await collectionContract.safeBatchTransferFrom(account,to,ids,amounts,"0x");
+    setStatus(el("transferStatus"), `Batch submitted:\n${tx.hash}\nWaiting for confirmation…`, "warn");
+    await tx.wait();
+    items.forEach((x,i)=> { x.balance -= amounts[i]; x.amount = x.balance; x.selected=false; });
+    holdings = holdings.filter(x=>x.balance>0n);
+    renderHoldings();
+    setStatus(el("transferStatus"), `ERC-1155 batch complete. ${items.length} token IDs transferred.`, "ok");
+  }
+}
+function wrap(fn, target=el("loadStatus")){
+  return async (...args) => {
+    try { await fn(...args); }
+    catch(e) {
+      console.error(e);
+      el("cancelScanBtn").classList.add("hidden");
+      const msg = e?.shortMessage || e?.reason || e?.message || String(e);
+      setStatus(target, msg, "err");
+    }
+  };
+}
+
+el("connectBtn").addEventListener("click", wrap(connect));
+el("refreshBtn").addEventListener("click", wrap(refreshNetwork));
+el("loadBtn").addEventListener("click", wrap(loadCollection));
+el("manualBtn").addEventListener("click", wrap(loadManual));
+el("cancelScanBtn").addEventListener("click", ()=>{ scanCancelled=true; setStatus(el("loadStatus"),"Cancelling after current RPC request…","warn"); });
+el("erc721Mode").addEventListener("change", ()=>{
+  el("helperControls").classList.toggle("hidden", el("erc721Mode").value !== "helper");
+});
+el("verifyHelperBtn").addEventListener("click", wrap(verifyHelper, el("transferStatus")));
+el("approveHelperBtn").addEventListener("click", wrap(approveHelper, el("transferStatus")));
+el("simulateBtn").addEventListener("click", wrap(preflight, el("transferStatus")));
+el("transferBtn").addEventListener("click", wrap(transfer, el("transferStatus")));
+el("selectAllBtn").addEventListener("click", ()=>{ holdings.forEach(x=>x.selected=true); renderHoldings(); });
+el("clearBtn").addEventListener("click", ()=>{ holdings.forEach(x=>x.selected=false); renderHoldings(); });
+
+if (window.ethereum?.on) {
+  window.ethereum.on("accountsChanged", ()=>location.reload());
+  window.ethereum.on("chainChanged", ()=>location.reload());
+}
+</script>
+</body>
+</html>
