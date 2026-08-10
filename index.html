@@ -128,7 +128,7 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">v8 · client-side only</div>
+    <div class="badge">v9 · client-side only</div>
   </div>
 
   <div class="grid">
@@ -396,16 +396,127 @@ function applyConfiguredHelper(){
 }
 
 function explorerTx(hash){const b=chainInfo().explorer;return b?`${b}/tx/${hash}`:null;}
-function normalizeContentURI(uri,tokenId=null){
-  if(!uri)return null; let u=String(uri).trim();
-  if(tokenId!==null)u=u.replaceAll("{id}",BigInt(tokenId).toString(16).padStart(64,"0"));
-  if(u.startsWith("ipfs://ipfs/"))u="https://ipfs.io/ipfs/"+u.slice(12);
-  else if(u.startsWith("ipfs://"))u="https://ipfs.io/ipfs/"+u.slice(7);
-  else if(u.startsWith("ar://"))u="https://arweave.net/"+u.slice(5);
+function normalizeContentURI(uri, tokenId=null){
+  if (!uri) return null;
+  let u = String(uri).trim();
+
+  if (tokenId !== null) {
+    const hex64 = BigInt(tokenId).toString(16).padStart(64, "0");
+    u = u.replaceAll("{id}", hex64);
+  }
+
+  // Keep inline metadata/images intact.
+  if (u.startsWith("data:")) return u;
+
+  if (u.startsWith("ipfs://ipfs/")) {
+    u = "https://ipfs.io/ipfs/" + u.slice("ipfs://ipfs/".length);
+  } else if (u.startsWith("ipfs://")) {
+    u = "https://ipfs.io/ipfs/" + u.slice("ipfs://".length);
+  } else if (u.startsWith("ar://")) {
+    u = "https://arweave.net/" + u.slice("ar://".length);
+  }
+
   return u;
 }
-async function fetchJSON(uri){const r=await fetch(normalizeContentURI(uri),{cache:"force-cache"});if(!r.ok)throw new Error(`Metadata HTTP ${r.status}`);return await r.json();}
-function resolveImage(meta){return meta?normalizeContentURI(meta.image||meta.image_url||meta.imageUrl||null):null;}
+
+async function fetchJSON(uri){
+  const url = normalizeContentURI(uri);
+  if (!url) return null;
+
+  // Support fully on-chain JSON metadata.
+  if (url.startsWith("data:application/json;base64,")) {
+    const encoded = url.slice("data:application/json;base64,".length);
+    return JSON.parse(atob(encoded));
+  }
+
+  if (url.startsWith("data:application/json,")) {
+    const encoded = url.slice("data:application/json,".length);
+    return JSON.parse(decodeURIComponent(encoded));
+  }
+
+  const response = await fetch(url, {
+    cache: "force-cache",
+    mode: "cors"
+  });
+
+  if (!response.ok) {
+    throw new Error(`Metadata HTTP ${response.status}`);
+  }
+
+  return await response.json();
+}
+
+function resolveImage(meta){
+  if (!meta) return null;
+  const image =
+    meta.image ||
+    meta.image_url ||
+    meta.imageUrl ||
+    meta.image_uri ||
+    meta.imageURI ||
+    null;
+
+  return normalizeContentURI(image);
+}
+
+async function enrichMetadata(address){
+  if (!holdings.length) return;
+
+  const readContract = new ethers.Contract(
+    address,
+    standard === "ERC721" ? ERC721_ABI : ERC1155_ABI,
+    rp()
+  );
+
+  let cursor = 0;
+  const concurrency = Math.min(8, holdings.length);
+
+  async function enrichOne(item){
+    try {
+      let uri;
+
+      if (standard === "ERC721") {
+        uri = await readContract.tokenURI(item.id);
+        item.tokenURI = normalizeContentURI(uri);
+      } else {
+        uri = await readContract.uri(item.id);
+        item.tokenURI = normalizeContentURI(uri, item.id);
+      }
+
+      if (!item.tokenURI) {
+        item.metadataState = "No token URI";
+        return;
+      }
+
+      const metadata = await fetchJSON(item.tokenURI);
+
+      item.name =
+        metadata?.name ||
+        metadata?.title ||
+        `Token #${item.id}`;
+
+      item.image = resolveImage(metadata);
+      item.metadataState = item.image ? "loaded" : "Metadata has no image";
+    } catch (error) {
+      console.warn(`Metadata failed for token #${item.id}`, error);
+      item.name = item.name || `Token #${item.id}`;
+      item.metadataState = extractErrorMessage(error);
+    }
+  }
+
+  const workers = Array.from({length: concurrency}, async () => {
+    while (cursor < holdings.length) {
+      const index = cursor++;
+      await enrichOne(holdings[index]);
+
+      // Update incrementally so images appear as they resolve.
+      renderHoldings();
+    }
+  });
+
+  await Promise.all(workers);
+}
+
 function saveURLState(){const u=new URL(location.href);const c=el("collection")?.value?.trim();if(c&&validAddress(c))u.searchParams.set("collection",c);else u.searchParams.delete("collection");if(chainId)u.searchParams.set("chain",String(chainId));history.replaceState({},"",u);}
 function restoreURLState(){const u=new URL(location.href);const c=u.searchParams.get("collection");if(c)el("collection").value=c;}
 
@@ -732,16 +843,22 @@ function renderHoldings(){
   for (const item of holdings){
     const div = document.createElement("div");
     div.className = "token" + (item.selected ? " selected" : "");
-    const imageHtml=item.image?`<img class="thumb" src="${item.image}" alt="" loading="lazy" referrerpolicy="no-referrer">`:`<div class="thumbFallback">No image</div>`;
+    const imageHtml = item.image
+      ? `<img class="thumb" src="${item.image}" alt="${item.name || `Token #${item.id}`}" loading="lazy" referrerpolicy="no-referrer">`
+      : `<div class="thumbFallback" title="${item.metadataState || "Metadata not loaded yet"}">${item.metadataState ? "No image" : "Loading…"}</div>`;
     div.innerHTML = `
       <input type="checkbox" ${item.selected?"checked":""} aria-label="Select token ${item.id}">
       ${imageHtml}
       <div class="tokenId">#${item.id}</div>
       <div class="tokenName">${item.name || `Token #${item.id}`}</div>
-      <div class="tokenMeta">${standard === "ERC1155" ? `Balance: ${item.balance}` : "ERC-721"}</div>
+      <div class="tokenMeta">${standard === "ERC1155" ? `Balance: ${item.balance}` : "ERC-721"}${item.metadataState && item.metadataState !== "loaded" ? ` · ${item.metadataState}` : ""}</div>
       ${standard === "ERC1155" ? `<div class="amount"><label>Send amount</label><input type="number" min="1" max="${item.balance}" value="${item.amount ?? item.balance}" data-amount></div>` : ""}
     `;
-    const img=div.querySelector("img.thumb"); if(img)img.addEventListener("error",()=>{img.outerHTML=`<div class="thumbFallback">Image unavailable</div>`;});
+    const img = div.querySelector("img.thumb");
+    if (img) img.addEventListener("error", () => {
+      item.metadataState = "Image URL failed to load";
+      img.outerHTML = `<div class="thumbFallback" title="${item.image || ""}">Image unavailable</div>`;
+    });
     const checkbox = div.querySelector('input[type="checkbox"]');
     checkbox.addEventListener("click", e => e.stopPropagation());
     checkbox.addEventListener("change", () => {

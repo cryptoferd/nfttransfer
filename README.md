@@ -224,3 +224,18 @@ v8 adds three one-click destination presets while preserving the fully editable 
 The zero address is displayed as a preset for convenience/reference, but transfer/preflight is intentionally blocked when it is selected. Standard ERC-721/ERC-1155 safe transfers reject the zero address, and the deployed `BatchNFTSender` helper also explicitly rejects `address(0)`.
 
 The `0x...dEaD` address is treated as an ordinary non-zero destination by the app.
+
+
+## v9 — thumbnail / metadata fix
+
+v9 restores the metadata enrichment function that was accidentally removed during the contract-only discovery rewrite.
+
+After holdings are discovered, the app now:
+- calls ERC-721 `tokenURI(tokenId)` or ERC-1155 `uri(tokenId)`
+- fetches JSON metadata
+- reads common image fields (`image`, `image_url`, `imageUrl`, `image_uri`, `imageURI`)
+- renders NFT names and thumbnails incrementally
+- supports `ipfs://`, `ar://`, normal HTTP(S), and `data:application/json` metadata
+- shows a useful fallback status when metadata or an image fails instead of silently showing "No image"
+
+Public metadata hosts can still block browser CORS requests. When that happens the card displays the failure state, while NFT transfer functionality remains unaffected.
