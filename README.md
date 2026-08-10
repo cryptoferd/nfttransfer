@@ -161,3 +161,29 @@ If `totalSupply()` is available, the UI can derive a default end of the token ra
 ERC-1155 does not define a standard method to enumerate every token ID owned by a wallet. v4 therefore does not scan historical logs. Use the Manual token IDs input; the app verifies each ID against the selected collection contract using `balanceOf(wallet, id)`.
 
 This keeps the tool RPC-friendly and avoids archive-node requirements.
+
+
+## v5 — built-in helper deployments
+
+The app now auto-fills these `BatchNFTSender` deployments based on the connected chain:
+
+- Robinhood Chain (4663): `0x19466Dd578cAB78BfcC3f776531598c1473d32ab`
+- Base (8453): `0x1d4f7624139d337A31cf08DB065Ec7F4Bd698C22`
+
+The UI still requires **Verify Helper** before enabling approval, and the helper field remains editable for other chains or future deployments.
+
+
+## v6 — stoppable ownership checks
+
+Large non-enumerable ERC-721 collections can require many `ownerOf()` contract calls.
+
+v6 adds a **Stop Check** button:
+
+- available only while a token-range ownership check is running
+- finishes the currently executing batch of contract reads
+- stops before beginning the next batch
+- keeps all owned token IDs found so far
+- leaves partial holdings visible and selectable
+- reports how many IDs were checked and how many owned tokens were found
+
+This is cooperative cancellation; already-sent RPC calls cannot be forcibly aborted, so stopping takes effect immediately after the current batch completes.

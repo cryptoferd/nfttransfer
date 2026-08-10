@@ -125,7 +125,7 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">v4 · client-side only</div>
+    <div class="badge">v6 · client-side only</div>
   </div>
 
   <div class="grid">
@@ -184,6 +184,7 @@
 
       <div class="buttons">
         <button id="loadBtn" class="primary" disabled>Inspect Contract & Load Holdings</button>
+        <button id="stopCheckBtn" class="danger" disabled>Stop Check</button>
         <button id="testRpcBtn" disabled>Test Read RPC</button>
       </div>
       <div id="loadStatus" class="status">Connect a wallet, then enter a collection address.</div>
@@ -224,6 +225,7 @@
           <div class="field">
             <label for="helperAddress">Deployed BatchNFTSender helper address</label>
             <input id="helperAddress" class="mono" placeholder="0x..." autocomplete="off" />
+            <div id="helperPresetInfo" style="font-size:11px;color:var(--muted);margin-top:5px"></div>
           </div>
           <div class="buttons">
             <button id="verifyHelperBtn">Verify Helper</button>
@@ -323,6 +325,11 @@ const READ_RPC_PRESETS = {
   43114: "https://avalanche-c-chain-rpc.publicnode.com"
 };
 
+const BATCH_HELPER_DEPLOYMENTS = {
+  4663: "0x19466Dd578cAB78BfcC3f776531598c1473d32ab", // Robinhood Chain
+  8453: "0x1d4f7624139d337A31cf08DB065Ec7F4Bd698C22"  // Base
+};
+
 const CHAIN_INFO = {
   1:{name:"Ethereum",explorer:"https://etherscan.io"},
   10:{name:"Optimism",explorer:"https://optimistic.etherscan.io"},
@@ -337,6 +344,29 @@ const CHAIN_INFO = {
   4663:{name:"Robinhood Chain",explorer:"https://explorer.mainnet.chain.robinhood.com"}
 };
 function chainInfo(){return CHAIN_INFO[chainId]||{name:`Chain ${chainId}`,explorer:null};}
+function configuredHelperAddress(){
+  return BATCH_HELPER_DEPLOYMENTS[chainId] || null;
+}
+function applyConfiguredHelper(){
+  const addr = configuredHelperAddress();
+  const field = el("helperAddress");
+  if (!field) return;
+  const info = el("helperPresetInfo");
+  if (addr) {
+    field.value = addr;
+    field.dataset.autoconfigured = "true";
+    field.title = `Configured helper for ${chainInfo().name}`;
+    if (info) info.textContent = `Auto-configured for ${chainInfo().name}. Verify before approving.`;
+  } else if (field.dataset.autoconfigured === "true") {
+    field.value = "";
+    delete field.dataset.autoconfigured;
+    field.title = "";
+    if (info) info.textContent = "No built-in helper configured for this chain.";
+  } else if (info) {
+    info.textContent = "No built-in helper configured for this chain.";
+  }
+}
+
 function explorerTx(hash){const b=chainInfo().explorer;return b?`${b}/tx/${hash}`:null;}
 function normalizeContentURI(uri,tokenId=null){
   if(!uri)return null; let u=String(uri).trim();
@@ -355,6 +385,8 @@ const el = id => document.getElementById(id);
 let provider, readProvider, signer, account, chainId, standard = null, collectionContract = null;
 let holdings = [];
 let helperVerified = false;
+let ownershipCheckStopRequested = false;
+let ownershipCheckRunning = false;
 
 function short(a){ return a ? `${a.slice(0,6)}…${a.slice(-4)}` : "—"; }
 function setStatus(node, text, kind=""){
@@ -484,6 +516,7 @@ async function connect(){
   const network = await provider.getNetwork();
   chainId = Number(network.chainId);
   await configureReadProvider();
+  applyConfiguredHelper();
   el("walletStat").textContent = short(account);
   el("walletStat").title = account;
   el("chainStat").textContent = `${chainInfo().name} (${chainId})`;
@@ -498,6 +531,7 @@ async function refreshNetwork(){
   const network = await provider.getNetwork();
   chainId = Number(network.chainId);
   await configureReadProvider();
+  applyConfiguredHelper();
   el("walletStat").textContent = short(account);
   el("walletStat").title = account;
   el("chainStat").textContent = `${chainInfo().name} (${chainId})`;
@@ -556,8 +590,30 @@ async function loadERC721Enumerable(address){
   return {supported:true, ids:uniqBigints(ids)};
 }
 
+
+function beginOwnershipCheck(){
+  ownershipCheckStopRequested = false;
+  ownershipCheckRunning = true;
+  el("stopCheckBtn").disabled = false;
+}
+function endOwnershipCheck(){
+  ownershipCheckRunning = false;
+  el("stopCheckBtn").disabled = true;
+}
+function requestOwnershipCheckStop(){
+  if (!ownershipCheckRunning) return;
+  ownershipCheckStopRequested = true;
+  el("stopCheckBtn").disabled = true;
+  setStatus(
+    el("loadStatus"),
+    "Stop requested. Finishing the current contract-call batch, then the check will stop and keep any holdings already found.",
+    "warn"
+  );
+}
+
 async function loadERC721ByRange(address){
   const c = new ethers.Contract(address, ERC721_ABI, rp());
+  beginOwnershipCheck();
   let start = BigInt(el("tokenStart").value || "0");
   let endInput = el("tokenEnd").value.trim();
   let end = endInput ? BigInt(endInput) : null;
@@ -585,6 +641,7 @@ async function loadERC721ByRange(address){
   let checked = 0n;
 
   for (let base = start; base <= end; base += BigInt(batchSize)) {
+    if (ownershipCheckStopRequested) break;
     const ids = [];
     for (let i = 0; i < batchSize; i++) {
       const id = base + BigInt(i);
@@ -604,13 +661,32 @@ async function loadERC721ByRange(address){
 
     owned.push(...results.filter(v => v !== null));
     checked += BigInt(ids.length);
+
+    // Preserve partial results live so stopping the scan does not discard progress.
+    holdings = uniqBigints(owned)
+      .sort((a,b)=>a<b?-1:a>b?1:0)
+      .map(id=>({id,selected:false}));
+    renderHoldings();
+
+    if (ownershipCheckStopRequested) break;
     setStatus(
       el("loadStatus"),
       `Checking this collection contract only…\nToken IDs ${start} → ${end}\nChecked ${checked} / ${count} · Found ${owned.length} owned`,
       "warn"
     );
   }
-  return uniqBigints(owned);
+  const finalOwned = uniqBigints(owned);
+  const stopped = ownershipCheckStopRequested;
+  endOwnershipCheck();
+
+  if (stopped) {
+    setStatus(
+      el("loadStatus"),
+      `Check stopped by user. Checked ${checked} of ${count} token IDs and found ${finalOwned.length} owned token${finalOwned.length===1?"":"s"}. Partial results were kept.`,
+      "warn"
+    );
+  }
+  return finalOwned;
 }
 
 async function loadERC1155ManualOnly(address){
@@ -657,6 +733,7 @@ function renderHoldings(){
 async function loadCollection(){
   if (!provider || !account) return;
   clearTechnicalError();
+  endOwnershipCheck();
   await configureReadProvider();
   const address = el("collection").value.trim();
   if (!validAddress(address)) throw new Error("Enter a valid collection contract address.");
@@ -686,7 +763,9 @@ setStatus(el("loadStatus"), "Detecting NFT standard…");
     } else {
       setStatus(el("loadStatus"), "Collection does not expose owner enumeration. Checking ownerOf() directly across this collection's token-ID range…", "warn");
       ids = await loadERC721ByRange(address);
-      setStatus(el("loadStatus"), `Contract scan complete. Found ${ids.length} currently-owned ERC-721 token${ids.length===1?"":"s"}. No historical logs were scanned.`, "ok");
+      if (!ownershipCheckStopRequested) {
+        setStatus(el("loadStatus"), `Contract scan complete. Found ${ids.length} currently-owned ERC-721 token${ids.length===1?"":"s"}. No historical logs were scanned.`, "ok");
+      }
     }
     holdings = ids.sort((a,b)=>a<b?-1:a>b?1:0).map(id=>({id,selected:false}));
   } else {
@@ -871,6 +950,7 @@ function wrap(fn, target=el("loadStatus")){
   return async (...args) => {
     try { await fn(...args); }
     catch(e) {
+      endOwnershipCheck();
       console.error(e);
 const msg = extractErrorMessage(e);
       setStatus(target, msg, "err");
@@ -883,10 +963,16 @@ el("connectBtn").addEventListener("click", wrap(connect));
 el("refreshBtn").addEventListener("click", wrap(refreshNetwork));
 el("testRpcBtn").addEventListener("click", wrap(testReadRpc));
 el("loadBtn").addEventListener("click", wrap(loadCollection));
+el("stopCheckBtn").addEventListener("click", requestOwnershipCheckStop);
 el("manualBtn").addEventListener("click", wrap(loadManual));
 
 el("erc721Mode").addEventListener("change", ()=>{
   el("helperControls").classList.toggle("hidden", el("erc721Mode").value !== "helper");
+});
+el("helperAddress").addEventListener("input", () => {
+  helperVerified = false;
+  el("approveHelperBtn").disabled = true;
+  el("revokeHelperBtn").disabled = true;
 });
 el("verifyHelperBtn").addEventListener("click", wrap(verifyHelper, el("transferStatus")));
 el("approveHelperBtn").addEventListener("click", wrap(approveHelper, el("transferStatus")));
