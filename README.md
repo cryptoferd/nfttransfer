@@ -187,3 +187,27 @@ v6 adds a **Stop Check** button:
 - reports how many IDs were checked and how many owned tokens were found
 
 This is cooperative cancellation; already-sent RPC calls cannot be forcibly aborted, so stopping takes effect immediately after the current batch completes.
+
+
+## v7 — Select Max
+
+v7 adds **Select Max** for ERC-721 helper-mode transfers.
+
+The button:
+
+1. reads the latest block's gas limit
+2. applies the configurable block safety percentage (default 90%)
+3. compares that value with the app's configured `Maximum gas units per batch`
+4. uses the lower value as the effective gas ceiling
+5. estimates the real `batchTransferERC721(...)` transaction
+6. binary-searches for the largest number of loaded NFTs that should fit in one transaction
+7. selects exactly that many NFTs
+
+Requirements:
+- destination wallet must be entered
+- batch helper must be verified
+- helper must already be approved for the collection
+
+The helper approval requirement is necessary because `estimateGas` executes the actual call as a simulation; without approval, the underlying ERC-721 transfers would revert.
+
+For ERC-1155, Select Max currently selects all loaded token IDs and asks the user to run Preflight Selected, because ERC-1155 uses its native `safeBatchTransferFrom`.

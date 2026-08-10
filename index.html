@@ -125,7 +125,7 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">v6 · client-side only</div>
+    <div class="badge">v7 · client-side only</div>
   </div>
 
   <div class="grid">
@@ -232,9 +232,18 @@
             <button id="approveHelperBtn" disabled>Approve Helper</button>
             <button id="revokeHelperBtn" class="danger" disabled>Revoke Approval</button>
           </div>
-          <div class="field" style="margin-top:12px">
-            <label for="maxBatchGas">Maximum gas units per batch</label>
-            <input id="maxBatchGas" type="number" min="100000" step="100000" value="12000000" />
+          <div class="row" style="margin-top:12px">
+            <div class="field">
+              <label for="maxBatchGas">Maximum gas units per batch</label>
+              <input id="maxBatchGas" type="number" min="100000" step="100000" value="12000000" />
+            </div>
+            <div class="field">
+              <label for="blockGasSafetyPct">Block gas safety %</label>
+              <input id="blockGasSafetyPct" type="number" min="50" max="95" step="1" value="90" />
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:-4px;margin-bottom:8px">
+            Select Max uses the lower of your configured gas ceiling or this percentage of the latest block gas limit.
           </div>
           <div class="warning">Only use a helper contract you deployed yourself or independently verified. <code>setApprovalForAll</code> gives that helper permission to move every NFT you own in this collection until you revoke it.</div>
         </div>
@@ -270,6 +279,7 @@
         <div id="collectionMeta" style="font-size:12px;color:var(--muted)">No collection loaded.</div>
       </div>
       <div class="buttons">
+        <button id="selectMaxBtn" disabled>Select Max</button>
         <button id="selectAllBtn" disabled>Select All</button>
         <button id="clearBtn" disabled>Clear</button>
       </div>
@@ -412,6 +422,7 @@ function enableConnected(on){
 function selectedItems(){ return holdings.filter(x => x.selected); }
 function updateTransferButtons(){
   const n = selectedItems().length;
+  el("selectMaxBtn").disabled = holdings.length === 0;
   el("selectAllBtn").disabled = holdings.length === 0;
   el("clearBtn").disabled = holdings.length === 0;
   el("simulateBtn").disabled = n === 0 || !account;
@@ -726,6 +737,7 @@ function renderHoldings(){
     if (amount) amount.addEventListener("input", () => item.amount = BigInt(amount.value || 0));
     grid.appendChild(div);
   }
+  el("selectMaxBtn").disabled = holdings.length === 0;
   el("selectAllBtn").disabled = holdings.length === 0;
   el("clearBtn").disabled = holdings.length === 0;
   updateTransferButtons();
@@ -855,6 +867,123 @@ async function revokeHelper(){
   const url=explorerTx(tx.hash); if(url)el("transferStatus").innerHTML+=`\n<a class="txlink" href="${url}" target="_blank" rel="noopener">View transaction on explorer ↗</a>`;
   await tx.wait(); el("approveHelperBtn").disabled=false; el("revokeHelperBtn").disabled=true; setStatus(el("transferStatus"),"Helper approval revoked.","ok");
 }
+
+async function selectMaxForSingleTransaction(){
+  if (!account || !provider) throw new Error("Connect your wallet first.");
+  if (!holdings.length) throw new Error("Load a collection first.");
+  if (standard !== "ERC721") {
+    // ERC-1155 already has a native batch function; select everything and rely on preflight.
+    holdings.forEach(x => x.selected = true);
+    renderHoldings();
+    setStatus(el("transferStatus"), `Selected all ${holdings.length} ERC-1155 token IDs. Run Preflight Selected to confirm the native batch fits.`, "ok");
+    return;
+  }
+
+  if (el("erc721Mode").value !== "helper") {
+    el("erc721Mode").value = "helper";
+    el("helperControls").classList.remove("hidden");
+  }
+
+  const to = el("recipient").value.trim();
+  if (!validAddress(to)) throw new Error("Enter a valid destination wallet before using Select Max.");
+  if (to.toLowerCase() === account.toLowerCase()) throw new Error("Destination is the same as the connected wallet.");
+
+  const helperAddr = el("helperAddress").value.trim();
+  if (!validAddress(helperAddr)) throw new Error("A valid batch helper address is required.");
+  if (!helperVerified) throw new Error("Click Verify Helper before using Select Max.");
+
+  const approved = await collectionContract.isApprovedForAll(account, helperAddr);
+  if (!approved) throw new Error("Approve the helper first. Gas estimation for the actual batch will revert until the helper is approved.");
+
+  const latestBlock = await rp().getBlock("latest");
+  if (!latestBlock?.gasLimit) throw new Error("Could not read the latest block gas limit.");
+
+  const safetyPct = Math.max(50, Math.min(95, Number(el("blockGasSafetyPct").value || 90)));
+  const blockSafeLimit = (BigInt(latestBlock.gasLimit) * BigInt(safetyPct)) / 100n;
+  const userLimit = BigInt(el("maxBatchGas").value || "12000000");
+  const targetGas = blockSafeLimit < userLimit ? blockSafeLimit : userLimit;
+
+  const h = new ethers.Contract(helperAddr, HELPER_ABI, signer);
+  const collection = el("collection").value.trim();
+
+  // Clear prior selection so the result is unambiguous.
+  holdings.forEach(x => x.selected = false);
+  renderHoldings();
+
+  setStatus(
+    el("transferStatus"),
+    `Calculating maximum one-transaction batch…\nBlock gas limit: ${latestBlock.gasLimit}\n${safetyPct}% block safety limit: ${blockSafeLimit}\nConfigured ceiling: ${userLimit}\nEffective target: ${targetGas}`,
+    "warn"
+  );
+
+  const candidates = [...holdings];
+
+  async function estimateCount(count){
+    if (count <= 0) return 0n;
+    const ids = candidates.slice(0, count).map(x => x.id);
+    try {
+      return BigInt(await h.batchTransferERC721.estimateGas(collection, to, ids));
+    } catch (e) {
+      // A revert / provider refusal is treated as "too large" for binary search.
+      console.warn(`Estimate failed for ${count} token(s)`, e);
+      return null;
+    }
+  }
+
+  // Fast path: see whether every loaded NFT fits.
+  const allGas = await estimateCount(candidates.length);
+  if (allGas !== null && allGas <= targetGas) {
+    candidates.forEach(x => x.selected = true);
+    renderHoldings();
+    setStatus(
+      el("transferStatus"),
+      `Select Max complete: all ${candidates.length} NFTs fit in one estimated batch.\nEstimated gas: ${allGas}\nEffective target: ${targetGas}`,
+      "ok"
+    );
+    return;
+  }
+
+  // Binary-search the largest prefix that estimates successfully under the target.
+  let low = 0;
+  let high = candidates.length;
+  let bestGas = 0n;
+
+  while (low < high) {
+    const mid = Math.floor((low + high + 1) / 2);
+    setStatus(
+      el("transferStatus"),
+      `Calculating maximum one-transaction batch…\nTesting ${mid} of ${candidates.length} NFTs\nEffective gas target: ${targetGas}`,
+      "warn"
+    );
+
+    const gas = await estimateCount(mid);
+    if (gas !== null && gas <= targetGas) {
+      low = mid;
+      bestGas = gas;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  if (low === 0) {
+    throw new Error("Even a single selected NFT could not be safely estimated through the helper. Check approval, recipient, collection restrictions, and helper configuration.");
+  }
+
+  // Re-estimate final count to give the most accurate status.
+  const finalGas = await estimateCount(low);
+  if (finalGas !== null) bestGas = finalGas;
+
+  candidates.slice(0, low).forEach(x => x.selected = true);
+  renderHoldings();
+
+  setStatus(
+    el("transferStatus"),
+    `Select Max complete: ${low} of ${candidates.length} NFTs selected for one transaction.\nEstimated gas: ${bestGas}\nEffective target: ${targetGas}\nRemaining after this batch: ${candidates.length - low}`,
+    "ok"
+  );
+}
+
+
 function validateTransfer(){
   const to = el("recipient").value.trim();
   if (!validAddress(to)) throw new Error("Enter a valid destination wallet.");
@@ -979,6 +1108,7 @@ el("approveHelperBtn").addEventListener("click", wrap(approveHelper, el("transfe
 el("revokeHelperBtn").addEventListener("click", wrap(revokeHelper, el("transferStatus")));
 el("simulateBtn").addEventListener("click", wrap(preflight, el("transferStatus")));
 el("transferBtn").addEventListener("click", wrap(transfer, el("transferStatus")));
+el("selectMaxBtn").addEventListener("click", wrap(selectMaxForSingleTransaction, el("transferStatus")));
 el("selectAllBtn").addEventListener("click", ()=>{ holdings.forEach(x=>x.selected=true); renderHoldings(); });
 el("clearBtn").addEventListener("click", ()=>{ holdings.forEach(x=>x.selected=false); renderHoldings(); });
 
