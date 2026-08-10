@@ -109,6 +109,11 @@
     details p, details li { color:var(--muted); font-size:12px; line-height:1.55; }
     code { color:#b7d9ff; background:#0a0e14; padding:2px 5px; border-radius:5px; }
     .footer { color:var(--muted); font-size:11px; line-height:1.5; margin-top:18px; text-align:center; }
+    .thumb { width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:9px; background:#070a0f; border:1px solid var(--border); display:block; }
+    .thumbFallback { width:100%; aspect-ratio:1/1; display:grid; place-items:center; border-radius:9px; border:1px dashed var(--border); color:var(--muted); font-size:11px; background:#090d13; }
+    .tokenName { font-size:12px; color:var(--text); font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .txlink { color:#9ecbff; text-decoration:none; }
+    .txlink:hover { text-decoration:underline; }
     .hidden { display:none !important; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   </style>
@@ -195,6 +200,11 @@
           <div class="buttons">
             <button id="verifyHelperBtn">Verify Helper</button>
             <button id="approveHelperBtn" disabled>Approve Helper</button>
+            <button id="revokeHelperBtn" class="danger" disabled>Revoke Approval</button>
+          </div>
+          <div class="field" style="margin-top:12px">
+            <label for="maxBatchGas">Maximum gas units per batch</label>
+            <input id="maxBatchGas" type="number" min="100000" step="100000" value="12000000" />
           </div>
           <div class="warning">Only use a helper contract you deployed yourself or independently verified. <code>setApprovalForAll</code> gives that helper permission to move every NFT you own in this collection until you revoke it.</div>
         </div>
@@ -249,6 +259,7 @@ const ERC165_ABI = ["function supportsInterface(bytes4 interfaceId) view returns
 const ERC721_ABI = [
   "function name() view returns (string)",
   "function symbol() view returns (string)",
+  "function tokenURI(uint256 tokenId) view returns (string)",
   "function balanceOf(address owner) view returns (uint256)",
   "function ownerOf(uint256 tokenId) view returns (address)",
   "function tokenOfOwnerByIndex(address owner,uint256 index) view returns (uint256)",
@@ -258,6 +269,7 @@ const ERC721_ABI = [
   "event Transfer(address indexed from,address indexed to,uint256 indexed tokenId)"
 ];
 const ERC1155_ABI = [
+  "function uri(uint256 id) view returns (string)",
   "function balanceOf(address account,uint256 id) view returns (uint256)",
   "function balanceOfBatch(address[] accounts,uint256[] ids) view returns (uint256[])",
   "function safeBatchTransferFrom(address from,address to,uint256[] ids,uint256[] amounts,bytes data)",
@@ -270,6 +282,7 @@ const HELPER_ABI = [
 ];
 const EXPECTED_MAGIC = ethers.id("EVM_NFT_BULK_SENDER_V1");
 
+\nconst CHAIN_INFO = {\n  1:{name:"Ethereum",explorer:"https://etherscan.io"},\n  10:{name:"Optimism",explorer:"https://optimistic.etherscan.io"},\n  56:{name:"BNB Smart Chain",explorer:"https://bscscan.com"},\n  100:{name:"Gnosis",explorer:"https://gnosisscan.io"},\n  137:{name:"Polygon",explorer:"https://polygonscan.com"},\n  8453:{name:"Base",explorer:"https://basescan.org"},\n  42161:{name:"Arbitrum One",explorer:"https://arbiscan.io"},\n  43114:{name:"Avalanche C-Chain",explorer:"https://snowtrace.io"},\n  59144:{name:"Linea",explorer:"https://lineascan.build"},\n  534352:{name:"Scroll",explorer:"https://scrollscan.com"},\n  4663:{name:"Robinhood Chain",explorer:"https://explorer.mainnet.chain.robinhood.com"}\n};\nfunction chainInfo(){return CHAIN_INFO[chainId]||{name:`Chain ${chainId}`,explorer:null};}\nfunction explorerTx(hash){const b=chainInfo().explorer;return b?`${b}/tx/${hash}`:null;}\nfunction normalizeContentURI(uri,tokenId=null){\n  if(!uri)return null; let u=String(uri).trim();\n  if(tokenId!==null)u=u.replaceAll("{id}",BigInt(tokenId).toString(16).padStart(64,"0"));\n  if(u.startsWith("ipfs://ipfs/"))u="https://ipfs.io/ipfs/"+u.slice(12);\n  else if(u.startsWith("ipfs://"))u="https://ipfs.io/ipfs/"+u.slice(7);\n  else if(u.startsWith("ar://"))u="https://arweave.net/"+u.slice(5);\n  return u;\n}\nasync function fetchJSON(uri){const r=await fetch(normalizeContentURI(uri),{cache:"force-cache"});if(!r.ok)throw new Error(`Metadata HTTP ${r.status}`);return await r.json();}\nfunction resolveImage(meta){return meta?normalizeContentURI(meta.image||meta.image_url||meta.imageUrl||null):null;}\nfunction saveURLState(){const u=new URL(location.href);const c=el("collection")?.value?.trim();if(c&&validAddress(c))u.searchParams.set("collection",c);else u.searchParams.delete("collection");if(chainId)u.searchParams.set("chain",String(chainId));history.replaceState({},"",u);}\nfunction restoreURLState(){const u=new URL(location.href);const c=u.searchParams.get("collection");if(c)el("collection").value=c;}\n
 const el = id => document.getElementById(id);
 let provider, signer, account, chainId, standard = null, collectionContract = null;
 let holdings = [];
@@ -325,7 +338,7 @@ async function connect(){
   chainId = Number(network.chainId);
   el("walletStat").textContent = short(account);
   el("walletStat").title = account;
-  el("chainStat").textContent = `${network.name || "EVM"} (${chainId})`;
+  el("chainStat").textContent = `${chainInfo().name} (${chainId})`;
   enableConnected(true);
   setStatus(el("loadStatus"), `Connected: ${account}\nChain ID: ${chainId}`, "ok");
 }
@@ -338,7 +351,7 @@ async function refreshNetwork(){
   chainId = Number(network.chainId);
   el("walletStat").textContent = short(account);
   el("walletStat").title = account;
-  el("chainStat").textContent = `${network.name || "EVM"} (${chainId})`;
+  el("chainStat").textContent = `${chainInfo().name} (${chainId})`;
   resetCollection();
   setStatus(el("loadStatus"), `Network refreshed. Chain ID: ${chainId}`, "ok");
 }
@@ -486,17 +499,22 @@ async function scanERC1155(address){
   }
   return owned;
 }
+\nasync function enrichMetadata(address){\n  let cursor=0;\n  async function one(item){\n    try{\n      let uri;\n      if(standard==="ERC721") uri=await new ethers.Contract(address,ERC721_ABI,provider).tokenURI(item.id);\n      else {uri=await new ethers.Contract(address,ERC1155_ABI,provider).uri(item.id);uri=normalizeContentURI(uri,item.id);}\n      item.tokenURI=normalizeContentURI(uri,standard==="ERC1155"?item.id:null);\n      if(!item.tokenURI)return;\n      const meta=await fetchJSON(item.tokenURI);\n      item.name=meta?.name||`Token #${item.id}`; item.image=resolveImage(meta);\n    }catch{item.name=item.name||`Token #${item.id}`;}\n  }\n  const workers=Array.from({length:Math.min(8,holdings.length)},async()=>{while(cursor<holdings.length){const i=cursor++;await one(holdings[i]);renderHoldings();}});\n  await Promise.all(workers);\n}\n
 function renderHoldings(){
   const grid = el("tokenGrid"); grid.innerHTML = "";
   for (const item of holdings){
     const div = document.createElement("div");
     div.className = "token" + (item.selected ? " selected" : "");
+    const imageHtml=item.image?`<img class="thumb" src="${item.image}" alt="" loading="lazy" referrerpolicy="no-referrer">`:`<div class="thumbFallback">No image</div>`;
     div.innerHTML = `
       <input type="checkbox" ${item.selected?"checked":""} aria-label="Select token ${item.id}">
+      ${imageHtml}
       <div class="tokenId">#${item.id}</div>
+      <div class="tokenName">${item.name || `Token #${item.id}`}</div>
       <div class="tokenMeta">${standard === "ERC1155" ? `Balance: ${item.balance}` : "ERC-721"}</div>
       ${standard === "ERC1155" ? `<div class="amount"><label>Send amount</label><input type="number" min="1" max="${item.balance}" value="${item.amount ?? item.balance}" data-amount></div>` : ""}
     `;
+    const img=div.querySelector("img.thumb"); if(img)img.addEventListener("error",()=>{img.outerHTML=`<div class="thumbFallback">Image unavailable</div>`;});
     const checkbox = div.querySelector('input[type="checkbox"]');
     checkbox.addEventListener("click", e => e.stopPropagation());
     checkbox.addEventListener("change", () => {
@@ -528,8 +546,9 @@ async function loadCollection(){
 
   standard = await detectStandard(address);
   const title = await tryCollectionName(address, standard);
-  el("collectionMeta").textContent = `${title} · ${address}`;
-  el("standardInfo").textContent = `${standard} detected on chain ID ${chainId}.`;
+  el("collectionMeta").textContent = `${title} · ${chainInfo().name} · ${address}`;
+  el("standardInfo").textContent = `${standard} detected on ${chainInfo().name} (chain ID ${chainId}).`;
+  saveURLState();
   el("standardInfo").className = "status ok";
 
   if (standard === "ERC721"){
@@ -557,6 +576,7 @@ async function loadCollection(){
   }
   el("cancelScanBtn").classList.add("hidden");
   renderHoldings();
+  enrichMetadata(address);
 }
 async function loadManual(){
   if (!provider || !account) return;
@@ -569,8 +589,9 @@ async function loadManual(){
 
   if (!standard) standard = await detectStandard(address);
   const title = await tryCollectionName(address, standard);
-  el("collectionMeta").textContent = `${title} · ${address}`;
-  el("standardInfo").textContent = `${standard} detected on chain ID ${chainId}.`;
+  el("collectionMeta").textContent = `${title} · ${chainInfo().name} · ${address}`;
+  el("standardInfo").textContent = `${standard} detected on ${chainInfo().name} (chain ID ${chainId}).`;
+  saveURLState();
   el("standardInfo").className = "status ok";
 
   if (standard === "ERC721"){
@@ -597,6 +618,8 @@ async function loadManual(){
     setStatus(el("loadStatus"), `Verified ${items.length} of ${ids.length} supplied ERC-1155 IDs with a non-zero balance.`, "ok");
   }
   renderHoldings();
+  saveURLState();
+  enrichMetadata(address);
 }
 async function verifyHelper(){
   const addr = el("helperAddress").value.trim();
@@ -610,6 +633,7 @@ async function verifyHelper(){
   helperVerified = true;
   const approved = await collectionContract.isApprovedForAll(account, addr);
   el("approveHelperBtn").disabled = approved;
+  el("revokeHelperBtn").disabled = !approved;
   setStatus(el("transferStatus"), approved ? "Helper verified and already approved for this collection." : "Helper verified. Approval is still required.", approved?"ok":"warn");
 }
 async function approveHelper(){
@@ -620,7 +644,15 @@ async function approveHelper(){
   setStatus(el("transferStatus"), `Approval submitted:\n${tx.hash}\nWaiting for confirmation…`, "warn");
   await tx.wait();
   el("approveHelperBtn").disabled = true;
+  el("revokeHelperBtn").disabled = false;
   setStatus(el("transferStatus"), "Helper approved for this collection.", "ok");
+}
+async function revokeHelper(){
+  const addr=el("helperAddress").value.trim(); if(!validAddress(addr))throw new Error("Enter a valid helper contract address.");
+  const tx=await collectionContract.setApprovalForAll(addr,false);
+  setStatus(el("transferStatus"),`Revocation submitted:\n${tx.hash}\nWaiting for confirmation…`,"warn");
+  const url=explorerTx(tx.hash); if(url)el("transferStatus").innerHTML+=`\n<a class="txlink" href="${url}" target="_blank" rel="noopener">View transaction on explorer ↗</a>`;
+  await tx.wait(); el("approveHelperBtn").disabled=false; el("revokeHelperBtn").disabled=true; setStatus(el("transferStatus"),"Helper approval revoked.","ok");
 }
 function validateTransfer(){
   const to = el("recipient").value.trim();
@@ -655,7 +687,9 @@ async function preflight(){
       const h = new ethers.Contract(helper, HELPER_ABI, signer);
       await h.batchTransferERC721.staticCall(el("collection").value.trim(), to, items.map(x=>x.id));
       const gas = await h.batchTransferERC721.estimateGas(el("collection").value.trim(), to, items.map(x=>x.id));
-      setStatus(el("transferStatus"), `Batch preflight passed for ${items.length} ERC-721 tokens.\nEstimated gas units: ${gas}`, "ok");
+      const maxGas=BigInt(el("maxBatchGas").value||"12000000");
+      if(gas>maxGas)throw new Error(`Estimated batch gas ${gas} exceeds configured limit ${maxGas}. Select fewer NFTs or raise the limit if the chain permits it.`);
+      setStatus(el("transferStatus"), `Batch preflight passed for ${items.length} ERC-721 tokens.\nEstimated gas units: ${gas}\nConfigured limit: ${maxGas}`, "ok");
     }
   } else {
     const ids = items.map(x=>x.id), amounts = items.map(x=>BigInt(x.amount ?? x.balance));
@@ -666,7 +700,8 @@ async function preflight(){
 }
 async function transfer(){
   const {to, items} = validateTransfer();
-  if (!confirm(`You are about to transfer ${items.length} selected token ID(s) to:\n\n${to}\n\nThis is irreversible. Continue?`)) return;
+  const collection=el("collection").value.trim();
+  if(!confirm(`NETWORK: ${chainInfo().name} (chain ${chainId})\nCOLLECTION: ${collection}\nRECIPIENT: ${to}\nTOKENS: ${items.length}\n\nThis transfer is irreversible. Continue?`)) return;
 
   if (standard === "ERC721"){
     const mode = el("erc721Mode").value;
@@ -732,10 +767,14 @@ el("erc721Mode").addEventListener("change", ()=>{
 });
 el("verifyHelperBtn").addEventListener("click", wrap(verifyHelper, el("transferStatus")));
 el("approveHelperBtn").addEventListener("click", wrap(approveHelper, el("transferStatus")));
+el("revokeHelperBtn").addEventListener("click", wrap(revokeHelper, el("transferStatus")));
 el("simulateBtn").addEventListener("click", wrap(preflight, el("transferStatus")));
 el("transferBtn").addEventListener("click", wrap(transfer, el("transferStatus")));
 el("selectAllBtn").addEventListener("click", ()=>{ holdings.forEach(x=>x.selected=true); renderHoldings(); });
 el("clearBtn").addEventListener("click", ()=>{ holdings.forEach(x=>x.selected=false); renderHoldings(); });
+
+el("collection").addEventListener("change", saveURLState);
+restoreURLState();
 
 if (window.ethereum?.on) {
   window.ethereum.on("accountsChanged", ()=>location.reload());

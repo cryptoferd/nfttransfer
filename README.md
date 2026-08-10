@@ -108,3 +108,19 @@ ERC-1155 has no standard owner-enumeration function, so event scanning or manual
 - `index.html` — complete static application
 - `BatchNFTSender.sol` — optional minimal ERC-721 batch helper contract
 - `README.md` — this guide
+
+
+## GitHub-ready additions
+
+- NFT thumbnails and metadata names
+- ERC-721 tokenURI and ERC-1155 uri support
+- IPFS / Arweave URL normalization
+- Known-chain names including Robinhood Chain
+- Safer helper approval with revocation button
+- Configurable ERC-721 batch gas ceiling
+- Shareable collection URL state
+- Strong final network/collection/recipient confirmation
+
+## GitHub Pages
+
+Put these files in the repository root. In GitHub open **Settings → Pages**, choose **Deploy from a branch**, select `main` and `/(root)`, then save.
