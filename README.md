@@ -211,3 +211,16 @@ Requirements:
 The helper approval requirement is necessary because `estimateGas` executes the actual call as a simulation; without approval, the underlying ERC-721 transfers would revert.
 
 For ERC-1155, Select Max currently selects all loaded token IDs and asks the user to run Preflight Selected, because ERC-1155 uses its native `safeBatchTransferFrom`.
+
+
+## v8 — destination presets
+
+v8 adds three one-click destination presets while preserving the fully editable custom-address field:
+
+- `0x000000000000000000000000000000000000FE2D`
+- `0x000000000000000000000000000000000000dEaD`
+- `0x0000000000000000000000000000000000000000`
+
+The zero address is displayed as a preset for convenience/reference, but transfer/preflight is intentionally blocked when it is selected. Standard ERC-721/ERC-1155 safe transfers reject the zero address, and the deployed `BatchNFTSender` helper also explicitly rejects `address(0)`.
+
+The `0x...dEaD` address is treated as an ordinary non-zero destination by the app.
