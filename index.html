@@ -125,7 +125,7 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">Static app · client-side only</div>
+    <div class="badge">v2 · client-side only</div>
   </div>
 
   <div class="grid">
@@ -158,11 +158,24 @@
         </div>
       </div>
 
+      <div class="field">
+        <label for="readRpc">Read-only RPC override <span style="font-weight:400">(optional)</span></label>
+        <input id="readRpc" class="mono" placeholder="Leave blank to use automatic/default RPC" autocomplete="off" />
+        <div style="font-size:11px;color:var(--muted);margin-top:5px">
+          Used only for reading contract data and event history. Your connected wallet still signs every transaction.
+        </div>
+      </div>
+
       <div class="buttons">
         <button id="loadBtn" class="primary" disabled>Detect & Load Holdings</button>
+        <button id="testRpcBtn" disabled>Test Read RPC</button>
         <button id="cancelScanBtn" class="danger hidden">Cancel Scan</button>
       </div>
       <div id="loadStatus" class="status">Connect a wallet, then enter a collection address.</div>
+      <details id="errorDetails" class="hidden" style="margin-top:10px">
+        <summary>Technical error details</summary>
+        <pre id="errorRaw" style="white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);font-size:11px"></pre>
+      </details>
 
       <details style="margin-top:12px">
         <summary>Manual token IDs / fallback</summary>
@@ -282,9 +295,20 @@ const HELPER_ABI = [
 ];
 const EXPECTED_MAGIC = ethers.id("EVM_NFT_BULK_SENDER_V1");
 
-\nconst CHAIN_INFO = {\n  1:{name:"Ethereum",explorer:"https://etherscan.io"},\n  10:{name:"Optimism",explorer:"https://optimistic.etherscan.io"},\n  56:{name:"BNB Smart Chain",explorer:"https://bscscan.com"},\n  100:{name:"Gnosis",explorer:"https://gnosisscan.io"},\n  137:{name:"Polygon",explorer:"https://polygonscan.com"},\n  8453:{name:"Base",explorer:"https://basescan.org"},\n  42161:{name:"Arbitrum One",explorer:"https://arbiscan.io"},\n  43114:{name:"Avalanche C-Chain",explorer:"https://snowtrace.io"},\n  59144:{name:"Linea",explorer:"https://lineascan.build"},\n  534352:{name:"Scroll",explorer:"https://scrollscan.com"},\n  4663:{name:"Robinhood Chain",explorer:"https://explorer.mainnet.chain.robinhood.com"}\n};\nfunction chainInfo(){return CHAIN_INFO[chainId]||{name:`Chain ${chainId}`,explorer:null};}\nfunction explorerTx(hash){const b=chainInfo().explorer;return b?`${b}/tx/${hash}`:null;}\nfunction normalizeContentURI(uri,tokenId=null){\n  if(!uri)return null; let u=String(uri).trim();\n  if(tokenId!==null)u=u.replaceAll("{id}",BigInt(tokenId).toString(16).padStart(64,"0"));\n  if(u.startsWith("ipfs://ipfs/"))u="https://ipfs.io/ipfs/"+u.slice(12);\n  else if(u.startsWith("ipfs://"))u="https://ipfs.io/ipfs/"+u.slice(7);\n  else if(u.startsWith("ar://"))u="https://arweave.net/"+u.slice(5);\n  return u;\n}\nasync function fetchJSON(uri){const r=await fetch(normalizeContentURI(uri),{cache:"force-cache"});if(!r.ok)throw new Error(`Metadata HTTP ${r.status}`);return await r.json();}\nfunction resolveImage(meta){return meta?normalizeContentURI(meta.image||meta.image_url||meta.imageUrl||null):null;}\nfunction saveURLState(){const u=new URL(location.href);const c=el("collection")?.value?.trim();if(c&&validAddress(c))u.searchParams.set("collection",c);else u.searchParams.delete("collection");if(chainId)u.searchParams.set("chain",String(chainId));history.replaceState({},"",u);}\nfunction restoreURLState(){const u=new URL(location.href);const c=u.searchParams.get("collection");if(c)el("collection").value=c;}\n
+\nconst READ_RPC_PRESETS = {
+  4663: "https://rpc.mainnet.chain.robinhood.com",
+  1: "https://ethereum-rpc.publicnode.com",
+  10: "https://optimism-rpc.publicnode.com",
+  56: "https://bsc-rpc.publicnode.com",
+  137: "https://polygon-bor-rpc.publicnode.com",
+  8453: "https://base-rpc.publicnode.com",
+  42161: "https://arbitrum-one-rpc.publicnode.com",
+  43114: "https://avalanche-c-chain-rpc.publicnode.com"
+};
+
+const CHAIN_INFO = {\n  1:{name:"Ethereum",explorer:"https://etherscan.io"},\n  10:{name:"Optimism",explorer:"https://optimistic.etherscan.io"},\n  56:{name:"BNB Smart Chain",explorer:"https://bscscan.com"},\n  100:{name:"Gnosis",explorer:"https://gnosisscan.io"},\n  137:{name:"Polygon",explorer:"https://polygonscan.com"},\n  8453:{name:"Base",explorer:"https://basescan.org"},\n  42161:{name:"Arbitrum One",explorer:"https://arbiscan.io"},\n  43114:{name:"Avalanche C-Chain",explorer:"https://snowtrace.io"},\n  59144:{name:"Linea",explorer:"https://lineascan.build"},\n  534352:{name:"Scroll",explorer:"https://scrollscan.com"},\n  4663:{name:"Robinhood Chain",explorer:"https://explorer.mainnet.chain.robinhood.com"}\n};\nfunction chainInfo(){return CHAIN_INFO[chainId]||{name:`Chain ${chainId}`,explorer:null};}\nfunction explorerTx(hash){const b=chainInfo().explorer;return b?`${b}/tx/${hash}`:null;}\nfunction normalizeContentURI(uri,tokenId=null){\n  if(!uri)return null; let u=String(uri).trim();\n  if(tokenId!==null)u=u.replaceAll("{id}",BigInt(tokenId).toString(16).padStart(64,"0"));\n  if(u.startsWith("ipfs://ipfs/"))u="https://ipfs.io/ipfs/"+u.slice(12);\n  else if(u.startsWith("ipfs://"))u="https://ipfs.io/ipfs/"+u.slice(7);\n  else if(u.startsWith("ar://"))u="https://arweave.net/"+u.slice(5);\n  return u;\n}\nasync function fetchJSON(uri){const r=await fetch(normalizeContentURI(uri),{cache:"force-cache"});if(!r.ok)throw new Error(`Metadata HTTP ${r.status}`);return await r.json();}\nfunction resolveImage(meta){return meta?normalizeContentURI(meta.image||meta.image_url||meta.imageUrl||null):null;}\nfunction saveURLState(){const u=new URL(location.href);const c=el("collection")?.value?.trim();if(c&&validAddress(c))u.searchParams.set("collection",c);else u.searchParams.delete("collection");if(chainId)u.searchParams.set("chain",String(chainId));history.replaceState({},"",u);}\nfunction restoreURLState(){const u=new URL(location.href);const c=u.searchParams.get("collection");if(c)el("collection").value=c;}\n
 const el = id => document.getElementById(id);
-let provider, signer, account, chainId, standard = null, collectionContract = null;
+let provider, readProvider, signer, account, chainId, standard = null, collectionContract = null;
 let holdings = [];
 let scanCancelled = false;
 let helperVerified = false;
@@ -308,6 +332,7 @@ function enableConnected(on){
   el("loadBtn").disabled = !on;
   el("manualBtn").disabled = !on;
   el("refreshBtn").disabled = !on;
+  el("testRpcBtn").disabled = !on;
 }
 function selectedItems(){ return holdings.filter(x => x.selected); }
 function updateTransferButtons(){
@@ -328,6 +353,85 @@ function resetCollection(){
   el("erc1155Controls").classList.add("hidden");
   updateTransferButtons();
 }
+
+function preferredReadRpc(){
+  const manual = el("readRpc")?.value?.trim();
+  if (manual) return manual;
+  return READ_RPC_PRESETS[chainId] || null;
+}
+async function configureReadProvider(){
+  const rpc = preferredReadRpc();
+  if (!rpc) {
+    readProvider = provider;
+    return {source:"wallet", rpc:null};
+  }
+  try {
+    const p = new ethers.JsonRpcProvider(rpc, chainId, {staticNetwork:true});
+    const n = await p.getNetwork();
+    if (Number(n.chainId) !== Number(chainId)) {
+      throw new Error(`RPC chain ID ${n.chainId} does not match connected wallet chain ${chainId}.`);
+    }
+    await p.getBlockNumber();
+    readProvider = p;
+    return {source:"rpc", rpc};
+  } catch (e) {
+    if (el("readRpc")?.value?.trim()) throw e;
+    // Automatic preset failed: safely fall back to wallet provider.
+    readProvider = provider;
+    return {source:"wallet-fallback", rpc};
+  }
+}
+function rp(){ return readProvider || provider; }
+
+function extractErrorMessage(e){
+  const candidates = [
+    e?.info?.error?.message,
+    e?.error?.message,
+    e?.data?.message,
+    e?.cause?.message,
+    e?.reason,
+    e?.shortMessage,
+    e?.message
+  ].filter(Boolean);
+
+  // Prefer a useful nested RPC message over ethers' generic wrapper.
+  const useful = candidates.find(x => !String(x).toLowerCase().includes("could not coalesce error"));
+  return String(useful || candidates[0] || e || "Unknown error");
+}
+function errorDump(e){
+  const seen = new WeakSet();
+  try {
+    return JSON.stringify(e, (k,v) => {
+      if (typeof v === "bigint") return v.toString();
+      if (typeof v === "object" && v !== null) {
+        if (seen.has(v)) return "[Circular]";
+        seen.add(v);
+      }
+      return v;
+    }, 2);
+  } catch {
+    return String(e?.stack || e?.message || e);
+  }
+}
+function showTechnicalError(e){
+  const d = el("errorDetails");
+  const raw = el("errorRaw");
+  if (!d || !raw) return;
+  raw.textContent = `${e?.stack || ""}\n\n${errorDump(e)}`.trim();
+  d.classList.remove("hidden");
+}
+function clearTechnicalError(){
+  el("errorDetails")?.classList.add("hidden");
+  if (el("errorRaw")) el("errorRaw").textContent = "";
+}
+async function testReadRpc(){
+  if (!provider || !chainId) throw new Error("Connect your wallet first.");
+  const result = await configureReadProvider();
+  const block = await rp().getBlockNumber();
+  let source = result.source === "rpc" ? result.rpc : "connected wallet RPC";
+  setStatus(el("loadStatus"), `Read RPC OK.\nSource: ${source}\nChain: ${chainInfo().name} (${chainId})\nLatest block: ${block.toLocaleString()}`, "ok");
+}
+
 async function connect(){
   if (!window.ethereum) throw new Error("No injected EVM wallet found. Install or open this page inside MetaMask, Rabby, Coinbase Wallet, etc.");
   provider = new ethers.BrowserProvider(window.ethereum);
@@ -336,6 +440,7 @@ async function connect(){
   account = await signer.getAddress();
   const network = await provider.getNetwork();
   chainId = Number(network.chainId);
+  await configureReadProvider();
   el("walletStat").textContent = short(account);
   el("walletStat").title = account;
   el("chainStat").textContent = `${chainInfo().name} (${chainId})`;
@@ -349,6 +454,7 @@ async function refreshNetwork(){
   account = await signer.getAddress();
   const network = await provider.getNetwork();
   chainId = Number(network.chainId);
+  await configureReadProvider();
   el("walletStat").textContent = short(account);
   el("walletStat").title = account;
   el("chainStat").textContent = `${chainInfo().name} (${chainId})`;
@@ -357,7 +463,7 @@ async function refreshNetwork(){
 }
 async function safeSupports(contractAddress, interfaceId){
   try {
-    const c = new ethers.Contract(contractAddress, ERC165_ABI, provider);
+    const c = new ethers.Contract(contractAddress, ERC165_ABI, rp());
     return await c.supportsInterface(interfaceId);
   } catch { return false; }
 }
@@ -372,7 +478,7 @@ async function detectStandard(address){
 
   // Conservative behavior fallback for contracts with broken ERC-165.
   try {
-    const c = new ethers.Contract(address, ERC721_ABI, provider);
+    const c = new ethers.Contract(address, ERC721_ABI, rp());
     await c.balanceOf(account);
     return "ERC721";
   } catch {}
@@ -380,14 +486,14 @@ async function detectStandard(address){
 }
 async function tryCollectionName(address, type){
   if (type !== "ERC721") return "ERC-1155 Collection";
-  const c = new ethers.Contract(address, ERC721_ABI, provider);
+  const c = new ethers.Contract(address, ERC721_ABI, rp());
   let name = "ERC-721 Collection", symbol = "";
   try { name = await c.name(); } catch {}
   try { symbol = await c.symbol(); } catch {}
   return symbol ? `${name} (${symbol})` : name;
 }
 async function loadERC721Enumerable(address){
-  const c = new ethers.Contract(address, ERC721_ABI, provider);
+  const c = new ethers.Contract(address, ERC721_ABI, rp());
   const bal = await c.balanceOf(account);
   const count = Number(bal);
   if (count === 0) return {supported:true, ids:[]};
@@ -414,13 +520,18 @@ async function getLogsAdaptive(baseFilter, start, end, initialChunk, onProgress)
     if (scanCancelled) throw new Error("Scan cancelled.");
     const toBlock = Math.min(end, cursor + chunk - 1);
     try {
-      const part = await provider.getLogs({...baseFilter, fromBlock: cursor, toBlock});
+      const part = await rp().getLogs({...baseFilter, fromBlock: cursor, toBlock});
       logs.push(...part);
       cursor = toBlock + 1;
       onProgress?.(cursor, end, chunk, logs.length);
       if (part.length < 200 && chunk < initialChunk) chunk = Math.min(initialChunk, chunk * 2);
     } catch (e) {
-      if (chunk <= 100) throw e;
+      if (chunk <= 100) {
+        const nested = extractErrorMessage(e);
+        throw new Error(`RPC log scan failed even at a 100-block window. ${nested}
+
+Try entering an archive-capable RPC in "Read-only RPC override", or set the scan start block closer to the collection deployment block.`);
+      }
       chunk = Math.max(100, Math.floor(chunk / 2));
       onProgress?.(cursor, end, chunk, logs.length);
     }
@@ -428,7 +539,7 @@ async function getLogsAdaptive(baseFilter, start, end, initialChunk, onProgress)
   return logs;
 }
 async function scanERC721(address){
-  const latest = await provider.getBlockNumber();
+  const latest = await rp().getBlockNumber();
   const start = Math.max(0, Number(el("startBlock").value || 0));
   const chunk = Math.max(100, Number(el("chunkSize").value || 20000));
   if (start > latest) throw new Error(`Start block ${start} is above current block ${latest}.`);
@@ -441,7 +552,7 @@ async function scanERC721(address){
   const inbound = await getLogsAdaptive({address, topics:[sig, null, acctTopic]}, start, latest, chunk, progress);
   const outbound = await getLogsAdaptive({address, topics:[sig, acctTopic]}, start, latest, chunk, progress);
   const candidates = uniqBigints([...inbound, ...outbound].map(log => BigInt(log.topics[3])));
-  const c = new ethers.Contract(address, ERC721_ABI, provider);
+  const c = new ethers.Contract(address, ERC721_ABI, rp());
   const owned = [];
   for (let i=0;i<candidates.length;i+=12){
     const slice = candidates.slice(i,i+12);
@@ -455,7 +566,7 @@ async function scanERC721(address){
   return owned;
 }
 async function scanERC1155(address){
-  const latest = await provider.getBlockNumber();
+  const latest = await rp().getBlockNumber();
   const start = Math.max(0, Number(el("startBlock").value || 0));
   const chunk = Math.max(100, Number(el("chunkSize").value || 20000));
   const iface = new ethers.Interface(ERC1155_ABI);
@@ -484,7 +595,7 @@ async function scanERC1155(address){
   }
   const ids = uniqBigints(candidates);
   if (!ids.length) return [];
-  const c = new ethers.Contract(address, ERC1155_ABI, provider);
+  const c = new ethers.Contract(address, ERC1155_ABI, rp());
   const owned = [];
   for (let i=0;i<ids.length;i+=80){
     const slice = ids.slice(i,i+80);
@@ -534,9 +645,11 @@ function renderHoldings(){
 }
 async function loadCollection(){
   if (!provider || !account) return;
+  clearTechnicalError();
+  await configureReadProvider();
   const address = el("collection").value.trim();
   if (!validAddress(address)) throw new Error("Enter a valid collection contract address.");
-  const code = await provider.getCode(address);
+  const code = await rp().getCode(address);
   if (code === "0x") throw new Error("No contract bytecode found at that address on the connected chain.");
 
   resetCollection();
@@ -580,11 +693,13 @@ async function loadCollection(){
 }
 async function loadManual(){
   if (!provider || !account) return;
+  clearTechnicalError();
+  await configureReadProvider();
   const address = el("collection").value.trim();
   if (!validAddress(address)) throw new Error("Enter a valid collection address first.");
   const ids = parseIds(el("manualIds").value);
   if (!ids.length) throw new Error("Enter at least one token ID.");
-  const code = await provider.getCode(address);
+  const code = await rp().getCode(address);
   if (code === "0x") throw new Error("No contract found at that address on this chain.");
 
   if (!standard) standard = await detectStandard(address);
@@ -624,9 +739,9 @@ async function loadManual(){
 async function verifyHelper(){
   const addr = el("helperAddress").value.trim();
   if (!validAddress(addr)) throw new Error("Enter a valid helper contract address.");
-  const code = await provider.getCode(addr);
+  const code = await rp().getCode(addr);
   if (code === "0x") throw new Error("No contract is deployed at this helper address on the connected chain.");
-  const h = new ethers.Contract(addr, HELPER_ABI, provider);
+  const h = new ethers.Contract(addr, HELPER_ABI, rp());
   let magic;
   try { magic = await h.MAGIC(); } catch { throw new Error("Helper does not expose the expected MAGIC() identifier."); }
   if (magic.toLowerCase() !== EXPECTED_MAGIC.toLowerCase()) throw new Error("Helper MAGIC value does not match the included BatchNFTSender.sol contract.");
@@ -751,14 +866,16 @@ function wrap(fn, target=el("loadStatus")){
     catch(e) {
       console.error(e);
       el("cancelScanBtn").classList.add("hidden");
-      const msg = e?.shortMessage || e?.reason || e?.message || String(e);
+      const msg = extractErrorMessage(e);
       setStatus(target, msg, "err");
+      showTechnicalError(e);
     }
   };
 }
 
 el("connectBtn").addEventListener("click", wrap(connect));
 el("refreshBtn").addEventListener("click", wrap(refreshNetwork));
+el("testRpcBtn").addEventListener("click", wrap(testReadRpc));
 el("loadBtn").addEventListener("click", wrap(loadCollection));
 el("manualBtn").addEventListener("click", wrap(loadManual));
 el("cancelScanBtn").addEventListener("click", ()=>{ scanCancelled=true; setStatus(el("loadStatus"),"Cancelling after current RPC request…","warn"); });

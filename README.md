@@ -124,3 +124,19 @@ ERC-1155 has no standard owner-enumeration function, so event scanning or manual
 ## GitHub Pages
 
 Put these files in the repository root. In GitHub open **Settings → Pages**, choose **Deploy from a branch**, select `main` and `/(root)`, then save.
+
+
+## v2 RPC / error-handling update
+
+This version separates read operations from transaction signing.
+
+- Wallet provider: used for account access and transaction signing.
+- Read provider: used for `eth_call`, bytecode checks, block reads, and historical `eth_getLogs`.
+- A read-only RPC override can be entered in the UI.
+- Robinhood Chain automatically tries `https://rpc.mainnet.chain.robinhood.com`.
+- If an automatic read RPC fails, the app falls back to the wallet's provider.
+- If a user-supplied read RPC fails, the app reports the error instead of silently falling back.
+- Ethers "could not coalesce error" wrappers are unpacked when possible to show the underlying RPC error.
+- Technical error details can be expanded from the UI.
+
+For collections that require historical event scanning, an archive-capable RPC may be necessary.
