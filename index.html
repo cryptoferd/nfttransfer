@@ -128,7 +128,7 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">v9 · client-side only</div>
+    <div class="badge">v10 · client-side only</div>
   </div>
 
   <div class="grid">
@@ -266,10 +266,12 @@
 
       <div class="sep"></div>
       <div class="buttons">
+        <button id="diagnoseBtn" disabled>Transfer Diagnostics</button>
         <button id="simulateBtn" disabled>Preflight Selected</button>
         <button id="transferBtn" class="good" disabled>Transfer Selected</button>
       </div>
       <div id="transferStatus" class="status">Nothing selected yet.</div>
+      <div id="diagnosticPanel" class="status hidden" style="margin-top:10px"></div>
 
       <details style="margin-top:12px">
         <summary>Safety notes</summary>
@@ -318,6 +320,7 @@ const ERC721_ABI = [
   "function safeTransferFrom(address from,address to,uint256 tokenId)",
   "function setApprovalForAll(address operator,bool approved)",
   "function isApprovedForAll(address owner,address operator) view returns (bool)",
+  "function getApproved(uint256 tokenId) view returns (address)",
   "event Transfer(address indexed from,address indexed to,uint256 indexed tokenId)"
 ];
 const ERC1155_ABI = [
@@ -554,6 +557,7 @@ function updateTransferButtons(){
   el("selectMaxBtn").disabled = holdings.length === 0;
   el("selectAllBtn").disabled = holdings.length === 0;
   el("clearBtn").disabled = holdings.length === 0;
+  el("diagnoseBtn").disabled = n === 0 || !account;
   el("simulateBtn").disabled = n === 0 || !account;
   el("transferBtn").disabled = n === 0 || !account;
   if (n) setStatus(el("transferStatus"), `${n} token ID${n===1?"":"s"} selected.`);
@@ -1172,6 +1176,153 @@ function recipientIsZeroAddress(){
 }
 
 
+
+function extractRevertSelector(error){
+  const candidates = [
+    error?.data,
+    error?.info?.error?.data,
+    error?.error?.data,
+    error?.cause?.data
+  ];
+
+  for (const c of candidates){
+    if (typeof c === "string" && /^0x[0-9a-fA-F]{8}/.test(c)) return c.slice(0,10);
+
+    if (c && typeof c === "object"){
+      const nested = c.data || c.result;
+      if (typeof nested === "string" && /^0x[0-9a-fA-F]{8}/.test(nested)) return nested.slice(0,10);
+    }
+  }
+
+  const text = [error?.message,error?.shortMessage,error?.reason].filter(Boolean).join(" ");
+  const match = text.match(/0x[0-9a-fA-F]{8}/);
+  return match ? match[0] : null;
+}
+
+function boolMark(value){ return value ? "✓" : "✗"; }
+
+async function diagnoseSelectedTransfer(){
+  const panel = el("diagnosticPanel");
+  panel.classList.remove("hidden");
+
+  if (standard !== "ERC721"){
+    setStatus(panel, "Transfer Diagnostics currently targets ERC-721 collections.", "warn");
+    return;
+  }
+
+  const items = selectedItems();
+  if (!items.length) throw new Error("Select at least one NFT first.");
+
+  const tokenId = items[0].id;
+  const to = el("recipient").value.trim();
+  const collection = el("collection").value.trim();
+
+  if (!validAddress(to)) throw new Error("Enter a valid destination wallet first.");
+  if (to.toLowerCase() === ZERO_ADDRESS) throw new Error("Choose a non-zero destination for diagnostics.");
+
+  const cRead = new ethers.Contract(collection, ERC721_ABI, rp());
+  const cSigned = new ethers.Contract(collection, ERC721_ABI, signer);
+
+  setStatus(panel, `Running diagnostics for token #${tokenId}…`, "warn");
+
+  let owner = null;
+  let tokenApproved = null;
+  let helperApproved = null;
+  let directOK = false;
+  let directErr = null;
+  let helperOK = null;
+  let helperErr = null;
+  const helperAddr = el("helperAddress").value.trim();
+
+  try { owner = await cRead.ownerOf(tokenId); } catch(e) { directErr = e; }
+  try { tokenApproved = await cRead.getApproved(tokenId); } catch {}
+
+  if (validAddress(helperAddr)){
+    try { helperApproved = await cRead.isApprovedForAll(account, helperAddr); } catch {}
+  }
+
+  if (owner && owner.toLowerCase() === account.toLowerCase()){
+    try {
+      await cSigned["safeTransferFrom(address,address,uint256)"].staticCall(account, to, tokenId);
+      directOK = true;
+    } catch(e) {
+      directErr = e;
+    }
+  }
+
+  if (validAddress(helperAddr)){
+    try {
+      const helperContract = new ethers.Contract(helperAddr, HELPER_ABI, signer);
+      await helperContract.batchTransferERC721.staticCall(collection, to, [tokenId]);
+      helperOK = true;
+    } catch(e) {
+      helperOK = false;
+      helperErr = e;
+    }
+  }
+
+  const ownerMatches = !!owner && owner.toLowerCase() === account.toLowerCase();
+  const tokenApprovalMatches =
+    !!tokenApproved &&
+    validAddress(helperAddr) &&
+    tokenApproved.toLowerCase() === helperAddr.toLowerCase();
+
+  const lines = [
+    `Token #${tokenId}`,
+    `Collection: ${collection}`,
+    `Recipient: ${to}`,
+    "",
+    `Owner: ${owner || "Unable to read"}`,
+    `Connected wallet owns token: ${boolMark(ownerMatches)}`,
+    `Token-specific approved address: ${tokenApproved || "Unable to read"}`
+  ];
+
+  if (validAddress(helperAddr)){
+    lines.push(`Helper: ${helperAddr}`);
+    lines.push(`Helper approved via setApprovalForAll: ${helperApproved === null ? "Unable to read" : boolMark(helperApproved)}`);
+    lines.push(`Helper is token-specific approval: ${boolMark(tokenApprovalMatches)}`);
+  } else {
+    lines.push("Helper: no valid helper address configured");
+  }
+
+  lines.push("");
+  lines.push(`Direct wallet transfer simulation: ${directOK ? "✓ PASS" : "✗ FAIL"}`);
+
+  if (!directOK && directErr){
+    const selector = extractRevertSelector(directErr);
+    lines.push(`Direct error: ${extractErrorMessage(directErr)}`);
+    if (selector) lines.push(`Direct revert selector: ${selector}`);
+  }
+
+  if (validAddress(helperAddr)){
+    lines.push(`Helper transfer simulation: ${helperOK ? "✓ PASS" : "✗ FAIL"}`);
+
+    if (helperOK === false && helperErr){
+      const selector = extractRevertSelector(helperErr);
+      lines.push(`Helper error: ${extractErrorMessage(helperErr)}`);
+      if (selector) lines.push(`Helper revert selector: ${selector}`);
+    }
+  }
+
+  lines.push("");
+
+  if (!ownerMatches){
+    lines.push("Diagnosis: the selected token is not currently owned by the connected wallet.");
+  } else if (directOK && helperOK === false){
+    lines.push("Diagnosis: direct wallet transfer works, but the helper path reverts. This collection likely rejects or restricts approved-operator smart-contract transfers.");
+  } else if (!directOK && helperOK === false){
+    lines.push("Diagnosis: both direct and helper simulations fail. The collection likely has a broader transfer restriction, paused state, destination restriction, or another custom rule.");
+  } else if (directOK && helperOK){
+    lines.push("Diagnosis: both paths simulate successfully. Any Select Max failure is likely gas/provider estimation behavior rather than collection transfer permissions.");
+  }
+
+  panel.textContent = lines.join("\\n");
+
+  if (helperErr) showTechnicalError(helperErr);
+  else if (directErr) showTechnicalError(directErr);
+}
+
+
 function validateTransfer(){
   const to = el("recipient").value.trim();
   if (!validAddress(to)) throw new Error("Enter a valid destination wallet.");
@@ -1295,6 +1446,7 @@ el("helperAddress").addEventListener("input", () => {
 el("verifyHelperBtn").addEventListener("click", wrap(verifyHelper, el("transferStatus")));
 el("approveHelperBtn").addEventListener("click", wrap(approveHelper, el("transferStatus")));
 el("revokeHelperBtn").addEventListener("click", wrap(revokeHelper, el("transferStatus")));
+el("diagnoseBtn").addEventListener("click", wrap(diagnoseSelectedTransfer, el("diagnosticPanel")));
 el("simulateBtn").addEventListener("click", wrap(preflight, el("transferStatus")));
 el("transferBtn").addEventListener("click", wrap(transfer, el("transferStatus")));
 el("selectMaxBtn").addEventListener("click", wrap(selectMaxForSingleTransaction, el("transferStatus")));
