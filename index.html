@@ -128,7 +128,7 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">v11 · client-side only</div>
+    <div class="badge">v12 · client-side only</div>
   </div>
 
   <div class="grid">
@@ -141,6 +141,7 @@
       <div class="statline">
         <div class="pill">Wallet: <strong id="walletStat">Not connected</strong></div>
         <div class="pill">Chain: <strong id="chainStat">—</strong></div>
+        <div class="pill">Read RPC: <strong id="activeReadRpc">—</strong></div>
       </div>
 
       <div class="sep"></div>
@@ -383,6 +384,36 @@ const READ_RPC_PRESETS = {
   43114: "https://avalanche-c-chain-rpc.publicnode.com"
 };
 
+const FALLBACK_RPC_POOLS = {
+  1: [
+    {name:"PublicNode Ethereum", url:"https://ethereum-rpc.publicnode.com"},
+    {name:"Cloudflare Ethereum", url:"https://cloudflare-eth.com/v1/mainnet"}
+  ],
+  8453: [
+    {name:"Base Official", url:"https://mainnet.base.org"},
+    {name:"PublicNode Base", url:"https://base-rpc.publicnode.com"}
+  ],
+  42161: [
+    {name:"PublicNode Arbitrum", url:"https://arbitrum-one-rpc.publicnode.com"}
+  ],
+  10: [
+    {name:"PublicNode Optimism", url:"https://optimism-rpc.publicnode.com"}
+  ],
+  137: [
+    {name:"PublicNode Polygon", url:"https://polygon-bor-rpc.publicnode.com"}
+  ],
+  56: [
+    {name:"PublicNode BNB", url:"https://bsc-rpc.publicnode.com"}
+  ],
+  43114: [
+    {name:"PublicNode Avalanche", url:"https://avalanche-c-chain-rpc.publicnode.com"}
+  ],
+  4663: [
+    {name:"Robinhood Official", url:"https://rpc.mainnet.chain.robinhood.com"}
+  ]
+};
+
+
 const DESTINATION_PRESETS = [
   { label: "FE2D", address: "0x000000000000000000000000000000000000FE2D", note: "Preset wallet" },
   { label: "dead", address: "0x000000000000000000000000000000000000dEaD", note: "Burn / dead address" },
@@ -559,6 +590,7 @@ function restoreURLState(){const u=new URL(location.href);const c=u.searchParams
 
 const el = id => document.getElementById(id);
 let provider, readProvider, signer, account, chainId, standard = null, collectionContract = null;
+let lastSuccessfulReadSource = null;
 let holdings = [];
 let helperVerified = false;
 let ownershipCheckStopRequested = false;
@@ -607,6 +639,109 @@ function resetCollection(){
   updateTransferButtons();
 }
 
+
+function providerLabelFromUrl(url){
+  if (!url) return "wallet provider";
+  try {
+    const host = new URL(url).hostname;
+    return host;
+  } catch {
+    return url;
+  }
+}
+
+async function makeStaticJsonProvider(url){
+  const p = new ethers.JsonRpcProvider(url, chainId, {staticNetwork:true});
+  const n = await p.getNetwork();
+  if (Number(n.chainId) !== Number(chainId)) {
+    throw new Error(`RPC ${url} returned chain ${n.chainId}, expected ${chainId}.`);
+  }
+  return p;
+}
+
+async function buildReadProviderCandidates(){
+  const candidates = [];
+  const seen = new Set();
+
+  const add = (name, p, url=null) => {
+    const key = url ? `url:${url}` : `provider:${name}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({name, provider:p, url});
+  };
+
+  const manual = el("readRpc")?.value?.trim();
+  if (manual) {
+    try {
+      add(`Manual · ${providerLabelFromUrl(manual)}`, await makeStaticJsonProvider(manual), manual);
+    } catch(e) {
+      console.warn("Manual read RPC candidate failed setup", e);
+    }
+  }
+
+  // Current configured readProvider next.
+  if (readProvider) {
+    const configuredUrl = preferredReadRpc();
+    add(
+      configuredUrl ? `Configured · ${providerLabelFromUrl(configuredUrl)}` : "Configured read provider",
+      readProvider,
+      configuredUrl || null
+    );
+  }
+
+  // Wallet provider is intentionally included before public fallbacks.
+  if (provider) add("Wallet provider", provider, null);
+
+  const pool = FALLBACK_RPC_POOLS[chainId] || [];
+  for (const item of pool) {
+    try {
+      add(item.name, await makeStaticJsonProvider(item.url), item.url);
+    } catch(e) {
+      console.warn(`Skipping fallback RPC ${item.name}`, e);
+    }
+  }
+
+  return candidates;
+}
+
+function rpcFailureLooksAccessRelated(error){
+  const msg = extractErrorMessage(error).toLowerCase();
+  return (
+    msg.includes("403") ||
+    msg.includes("401") ||
+    msg.includes("forbidden") ||
+    msg.includes("unauthorized") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("cors")
+  );
+}
+
+async function getLogsWithProviderFallback(filter, fromBlock, toBlock){
+  const candidates = await buildReadProviderCandidates();
+  const errors = [];
+
+  for (const candidate of candidates) {
+    try {
+      const logs = await candidate.provider.getLogs({
+        ...filter,
+        fromBlock,
+        toBlock
+      });
+
+      lastSuccessfulReadSource = candidate.name;
+      if (el("activeReadRpc")) el("activeReadRpc").textContent = candidate.name;
+      return {logs, source:candidate.name};
+    } catch(e) {
+      errors.push(`${candidate.name}: ${extractErrorMessage(e)}`);
+      console.warn(`RPC candidate failed: ${candidate.name}`, e);
+    }
+  }
+
+  const combined = errors.slice(-6).join("\n");
+  throw new Error(`All available RPC providers failed for eth_getLogs.\n${combined}`);
+}
+
+
 function preferredReadRpc(){
   const manual = el("readRpc")?.value?.trim();
   if (manual) return manual;
@@ -616,6 +751,8 @@ async function configureReadProvider(){
   const rpc = preferredReadRpc();
   if (!rpc) {
     readProvider = provider;
+    lastSuccessfulReadSource = "Wallet provider";
+    if (el("activeReadRpc")) el("activeReadRpc").textContent = lastSuccessfulReadSource;
     return {source:"wallet", rpc:null};
   }
   try {
@@ -626,11 +763,15 @@ async function configureReadProvider(){
     }
     await p.getBlockNumber();
     readProvider = p;
+    lastSuccessfulReadSource = providerLabelFromUrl(rpc);
+    if (el("activeReadRpc")) el("activeReadRpc").textContent = lastSuccessfulReadSource;
     return {source:"rpc", rpc};
   } catch (e) {
     if (el("readRpc")?.value?.trim()) throw e;
     // Automatic preset failed: safely fall back to wallet provider.
     readProvider = provider;
+    lastSuccessfulReadSource = "Wallet provider";
+    if (el("activeReadRpc")) el("activeReadRpc").textContent = lastSuccessfulReadSource;
     return {source:"wallet-fallback", rpc};
   }
 }
@@ -880,7 +1021,8 @@ async function getContractLogsAdaptive(baseFilter, start, end, initialChunk, lab
     const toBlock = Math.min(end, cursor + chunk - 1);
 
     try {
-      const part = await rp().getLogs({...baseFilter, fromBlock: cursor, toBlock});
+      const result = await getLogsWithProviderFallback(baseFilter, cursor, toBlock);
+      const part = result.logs;
       logs.push(...part);
       cursor = toBlock + 1;
 
