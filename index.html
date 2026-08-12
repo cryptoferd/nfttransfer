@@ -128,7 +128,7 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">v10 · client-side only</div>
+    <div class="badge">v11 · client-side only</div>
   </div>
 
   <div class="grid">
@@ -169,6 +169,23 @@
         </div>
       </div>
 
+      <details style="margin-bottom:12px">
+        <summary>ERC-1155 auto-discovery settings</summary>
+        <div class="row" style="margin-top:10px">
+          <div class="field">
+            <label for="erc1155StartBlock">Contract scan start block</label>
+            <input id="erc1155StartBlock" type="number" min="0" step="1" value="0" />
+          </div>
+          <div class="field">
+            <label for="erc1155LogChunk">Event log chunk size</label>
+            <input id="erc1155LogChunk" type="number" min="100" step="100" value="20000" />
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--muted)">
+          Scans only this ERC-1155 contract's TransferSingle/TransferBatch events involving your wallet, then verifies current balances.
+        </div>
+      </details>
+
       <div class="field">
         <label for="readRpc">Read-only RPC override <span style="font-weight:400">(optional)</span></label>
         <input id="readRpc" class="mono" placeholder="Leave blank to use automatic/default RPC" autocomplete="off" />
@@ -176,6 +193,23 @@
           Used only for contract reads. Your connected wallet still signs every transaction.
         </div>
       </div>
+
+      <details style="margin-bottom:12px">
+        <summary>ERC-1155 auto-discovery settings</summary>
+        <div class="row" style="margin-top:10px">
+          <div class="field">
+            <label for="erc1155StartBlock">Contract scan start block</label>
+            <input id="erc1155StartBlock" type="number" min="0" step="1" value="0" />
+          </div>
+          <div class="field">
+            <label for="erc1155LogChunk">Event log chunk size</label>
+            <input id="erc1155LogChunk" type="number" min="100" step="100" value="20000" />
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--muted)">
+          Scans only this ERC-1155 contract's TransferSingle/TransferBatch events involving your wallet, then verifies current balances.
+        </div>
+      </details>
 
       <div class="field">
         <label for="readRpc">Read-only RPC override <span style="font-weight:400">(optional)</span></label>
@@ -750,7 +784,7 @@ function requestOwnershipCheckStop(){
   el("stopCheckBtn").disabled = true;
   setStatus(
     el("loadStatus"),
-    "Stop requested. Finishing the current contract-call batch, then the check will stop and keep any holdings already found.",
+    "Stop requested. Finishing the current contract/RPC batch, then the check will stop and keep any holdings already found.",
     "warn"
   );
 }
@@ -832,6 +866,147 @@ async function loadERC721ByRange(address){
   }
   return finalOwned;
 }
+
+
+async function getContractLogsAdaptive(baseFilter, start, end, initialChunk, label){
+  let cursor = start;
+  let chunk = Math.max(100, initialChunk);
+  const logs = [];
+  beginOwnershipCheck();
+
+  while (cursor <= end){
+    if (ownershipCheckStopRequested) break;
+
+    const toBlock = Math.min(end, cursor + chunk - 1);
+
+    try {
+      const part = await rp().getLogs({...baseFilter, fromBlock: cursor, toBlock});
+      logs.push(...part);
+      cursor = toBlock + 1;
+
+      setStatus(
+        el("loadStatus"),
+        `${label}\nBlocks ${start.toLocaleString()} → ${end.toLocaleString()}\nReached ${Math.min(cursor,end).toLocaleString()} · ${logs.length} matching events`,
+        "warn"
+      );
+
+      if (part.length < 100 && chunk < initialChunk){
+        chunk = Math.min(initialChunk, chunk * 2);
+      }
+    } catch(e){
+      if (chunk <= 100){
+        endOwnershipCheck();
+        throw new Error(`ERC-1155 contract event query failed at a 100-block window. ${extractErrorMessage(e)}\n\nTry another read-only RPC, use a later contract scan start block, or use Manual token IDs.`);
+      }
+      chunk = Math.max(100, Math.floor(chunk / 2));
+    }
+  }
+
+  return logs;
+}
+
+async function discoverERC1155Holdings(address){
+  const latest = await rp().getBlockNumber();
+  const start = Math.max(0, Number(el("erc1155StartBlock").value || 0));
+  const chunk = Math.max(100, Number(el("erc1155LogChunk").value || 20000));
+
+  if (start > latest){
+    throw new Error(`ERC-1155 start block ${start} is above current block ${latest}.`);
+  }
+
+  const iface = new ethers.Interface(ERC1155_ABI);
+  const singleTopic = iface.getEvent("TransferSingle").topicHash;
+  const batchTopic = iface.getEvent("TransferBatch").topicHash;
+  const acctTopic = topicAddress(account);
+
+  const queries = [
+    ["TransferSingle sent by wallet", {address, topics:[singleTopic, null, acctTopic]}],
+    ["TransferSingle received by wallet", {address, topics:[singleTopic, null, null, acctTopic]}],
+    ["TransferBatch sent by wallet", {address, topics:[batchTopic, null, acctTopic]}],
+    ["TransferBatch received by wallet", {address, topics:[batchTopic, null, null, acctTopic]}]
+  ];
+
+  const candidateIds = [];
+
+  for (const [label, filter] of queries){
+    if (ownershipCheckStopRequested) break;
+
+    const logs = await getContractLogsAdaptive(
+      filter,
+      start,
+      latest,
+      chunk,
+      `Scanning this ERC-1155 contract: ${label}…`
+    );
+
+    for (const log of logs){
+      try {
+        const parsed = iface.parseLog(log);
+
+        if (parsed.name === "TransferSingle"){
+          candidateIds.push(BigInt(parsed.args.id));
+        } else if (parsed.name === "TransferBatch"){
+          for (const id of parsed.args.ids){
+            candidateIds.push(BigInt(id));
+          }
+        }
+      } catch {}
+    }
+  }
+
+  const ids = uniqBigints(candidateIds);
+  const owned = [];
+  const contract = new ethers.Contract(address, ERC1155_ABI, rp());
+
+  for (let i = 0; i < ids.length; i += 100){
+    if (ownershipCheckStopRequested) break;
+
+    const slice = ids.slice(i, i + 100);
+    let balances;
+
+    try {
+      balances = await contract.balanceOfBatch(slice.map(() => account), slice);
+    } catch {
+      balances = await Promise.all(slice.map(id => contract.balanceOf(account, id)));
+    }
+
+    slice.forEach((id, j) => {
+      const balance = BigInt(balances[j]);
+      if (balance > 0n){
+        owned.push({id, balance, amount: balance, selected: false});
+      }
+    });
+
+    holdings = owned.slice().sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
+    renderHoldings();
+
+    setStatus(
+      el("loadStatus"),
+      `Verifying ERC-1155 balances…\nChecked ${Math.min(i+100, ids.length)} / ${ids.length} candidate token IDs · ${owned.length} currently owned`,
+      "warn"
+    );
+  }
+
+  const stopped = ownershipCheckStopRequested;
+  endOwnershipCheck();
+
+  if (stopped){
+    setStatus(
+      el("loadStatus"),
+      `ERC-1155 discovery stopped. Kept ${owned.length} currently-owned token ID${owned.length===1?"":"s"} found so far.`,
+      "warn"
+    );
+  } else {
+    setStatus(
+      el("loadStatus"),
+      `ERC-1155 auto-discovery complete. Found ${owned.length} currently-owned token ID${owned.length===1?"":"s"} in this collection.`,
+      "ok"
+    );
+  }
+
+  return owned;
+}
+
 
 async function loadERC1155ManualOnly(address){
   setStatus(
@@ -923,7 +1098,7 @@ setStatus(el("loadStatus"), "Detecting NFT standard…");
     collectionContract = new ethers.Contract(address, ERC1155_ABI, signer);
     el("erc1155Controls").classList.remove("hidden");
     el("erc721Controls").classList.add("hidden");
-    holdings = await loadERC1155ManualOnly(address);
+    holdings = await discoverERC1155Holdings(address);
   }
 renderHoldings();
   enrichMetadata(address);
