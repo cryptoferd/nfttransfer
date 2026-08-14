@@ -128,7 +128,7 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">v10 · client-side only</div>
+    <div class="badge">v12 · client-side only</div>
   </div>
 
   <div class="grid">
@@ -164,6 +164,9 @@
       <div class="field">
         <label for="readBatchSize">Contract-call batch size</label>
         <input id="readBatchSize" type="number" min="1" max="100" step="1" value="20" />
+        <div id="checkerThrottleNote" style="font-size:11px;color:var(--muted);margin-top:5px">
+          Robinhood automatically uses a smaller batch and delay to avoid public-RPC rate limits.
+        </div>
         <div style="font-size:11px;color:var(--muted);margin-top:5px">
           Used only for ERC-721 collections that do not expose owner enumeration. The app checks <code>ownerOf()</code> directly on this collection contract—no historical blockchain log scan.
         </div>
@@ -357,6 +360,7 @@ const DESTINATION_PRESETS = [
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 const BATCH_HELPER_DEPLOYMENTS = {
+  1: "0x1D4671d55C894d2a166a0aDc9720faBb76f5FfB1", // Ethereum Mainnet
   4663: "0x19466Dd578cAB78BfcC3f776531598c1473d32ab", // Robinhood Chain
   8453: "0x1d4f7624139d337A31cf08DB065Ec7F4Bd698C22"  // Base
 };
@@ -530,6 +534,90 @@ let helperVerified = false;
 let ownershipCheckStopRequested = false;
 let ownershipCheckRunning = false;
 
+
+const CHECKER_DEFAULTS = {
+  4663: { batchSize: 5, delayMs: 250, maxRetries: 6 }, // Robinhood Chain
+  default: { batchSize: 20, delayMs: 0, maxRetries: 4 }
+};
+
+function checkerConfig(){
+  return CHECKER_DEFAULTS[chainId] || CHECKER_DEFAULTS.default;
+}
+
+function sleep(ms){
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isRateLimitError(error){
+  const text = [
+    error?.message,
+    error?.shortMessage,
+    error?.reason,
+    error?.info?.error?.message,
+    error?.error?.message
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  return text.includes("429") ||
+         text.includes("too many requests") ||
+         text.includes("rate limit") ||
+         text.includes("rate-limit");
+}
+
+function isFetchOrCorsError(error){
+  const text = [
+    error?.message,
+    error?.shortMessage,
+    error?.reason
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  return text.includes("failed to fetch") ||
+         text.includes("cors") ||
+         text.includes("networkerror") ||
+         text.includes("network request failed");
+}
+
+async function withCheckerRetry(task, label="contract read"){
+  const cfg = checkerConfig();
+  let waitMs = 500;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= cfg.maxRetries; attempt++){
+    if (ownershipCheckStopRequested) throw new Error("Ownership check stopped.");
+
+    try {
+      return await task();
+    } catch (error) {
+      lastError = error;
+
+      if (isFetchOrCorsError(error) && readProvider !== provider) {
+        readProvider = provider;
+        setStatus(
+          el("loadStatus"),
+          `Direct read RPC was blocked or unreachable. Falling back to the connected wallet provider for ${label}…`,
+          "warn"
+        );
+        await sleep(250);
+        continue;
+      }
+
+      if (!isRateLimitError(error) || attempt === cfg.maxRetries) {
+        throw error;
+      }
+
+      setStatus(
+        el("loadStatus"),
+        `RPC rate limited while checking ${label}. Waiting ${(waitMs/1000).toFixed(waitMs >= 1000 ? 1 : 2)}s before retry ${attempt + 1}/${cfg.maxRetries}…`,
+        "warn"
+      );
+
+      await sleep(waitMs);
+      waitMs = Math.min(waitMs * 2, 8000);
+    }
+  }
+
+  throw lastError || new Error(`Failed ${label}.`);
+}
+
 function short(a){ return a ? `${a.slice(0,6)}…${a.slice(-4)}` : "—"; }
 function setStatus(node, text, kind=""){
   node.textContent = text;
@@ -659,6 +747,8 @@ async function connect(){
   account = await signer.getAddress();
   const network = await provider.getNetwork();
   chainId = Number(network.chainId);
+  const checkerDefaults = checkerConfig();
+  if (el("readBatchSize")) el("readBatchSize").value = String(checkerDefaults.batchSize);
   await configureReadProvider();
   applyConfiguredHelper();
   el("walletStat").textContent = short(account);
@@ -674,6 +764,8 @@ async function refreshNetwork(){
   account = await signer.getAddress();
   const network = await provider.getNetwork();
   chainId = Number(network.chainId);
+  const checkerDefaults = checkerConfig();
+  if (el("readBatchSize")) el("readBatchSize").value = String(checkerDefaults.batchSize);
   await configureReadProvider();
   applyConfiguredHelper();
   el("walletStat").textContent = short(account);
@@ -780,7 +872,9 @@ async function loadERC721ByRange(address){
     throw new Error(`Requested range contains ${count} token IDs. Narrow the range to 100,000 IDs or fewer.`);
   }
 
-  const batchSize = Math.max(1, Math.min(100, Number(el("readBatchSize").value || 20)));
+  const cfg = checkerConfig();
+  const requestedBatch = Number(el("readBatchSize").value || cfg.batchSize);
+  const batchSize = Math.max(1, Math.min(100, requestedBatch));
   const owned = [];
   let checked = 0n;
 
@@ -795,13 +889,23 @@ async function loadERC721ByRange(address){
 
     const results = await Promise.all(ids.map(async id => {
       try {
-        const owner = await c.ownerOf(id);
+        const owner = await withCheckerRetry(
+          () => c.ownerOf(id),
+          `token #${id}`
+        );
         return owner.toLowerCase() === account.toLowerCase() ? id : null;
-      } catch {
+      } catch (error) {
         // Nonexistent/burned IDs are expected on many collections.
+        // Preserve real RPC/rate-limit failures after retries.
+        if (isRateLimitError(error) || isFetchOrCorsError(error)) throw error;
         return null;
       }
     }));
+
+    const cfg = checkerConfig();
+    if (cfg.delayMs > 0 && !ownershipCheckStopRequested) {
+      await sleep(cfg.delayMs);
+    }
 
     owned.push(...results.filter(v => v !== null));
     checked += BigInt(ids.length);
