@@ -20,7 +20,11 @@ contract BatchNFTSender {
         if (tokenIds.length == 0) revert EmptyBatch();
 
         for (uint256 i = 0; i < tokenIds.length; ) {
-            IERC721Minimal(collection).safeTransferFrom(msg.sender, to, tokenIds[i]);
+            IERC721Minimal(collection).safeTransferFrom(
+                msg.sender,
+                to,
+                tokenIds[i]
+            );
             unchecked { ++i; }
         }
     }

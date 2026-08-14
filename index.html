@@ -128,7 +128,7 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">v12 · client-side only</div>
+    <div class="badge">v10 · client-side only</div>
   </div>
 
   <div class="grid">
@@ -141,7 +141,6 @@
       <div class="statline">
         <div class="pill">Wallet: <strong id="walletStat">Not connected</strong></div>
         <div class="pill">Chain: <strong id="chainStat">—</strong></div>
-        <div class="pill">Read RPC: <strong id="activeReadRpc">—</strong></div>
       </div>
 
       <div class="sep"></div>
@@ -170,23 +169,6 @@
         </div>
       </div>
 
-      <details style="margin-bottom:12px">
-        <summary>ERC-1155 auto-discovery settings</summary>
-        <div class="row" style="margin-top:10px">
-          <div class="field">
-            <label for="erc1155StartBlock">Contract scan start block</label>
-            <input id="erc1155StartBlock" type="number" min="0" step="1" value="0" />
-          </div>
-          <div class="field">
-            <label for="erc1155LogChunk">Event log chunk size</label>
-            <input id="erc1155LogChunk" type="number" min="100" step="100" value="20000" />
-          </div>
-        </div>
-        <div style="font-size:11px;color:var(--muted)">
-          Scans only this ERC-1155 contract's TransferSingle/TransferBatch events involving your wallet, then verifies current balances.
-        </div>
-      </details>
-
       <div class="field">
         <label for="readRpc">Read-only RPC override <span style="font-weight:400">(optional)</span></label>
         <input id="readRpc" class="mono" placeholder="Leave blank to use automatic/default RPC" autocomplete="off" />
@@ -194,23 +176,6 @@
           Used only for contract reads. Your connected wallet still signs every transaction.
         </div>
       </div>
-
-      <details style="margin-bottom:12px">
-        <summary>ERC-1155 auto-discovery settings</summary>
-        <div class="row" style="margin-top:10px">
-          <div class="field">
-            <label for="erc1155StartBlock">Contract scan start block</label>
-            <input id="erc1155StartBlock" type="number" min="0" step="1" value="0" />
-          </div>
-          <div class="field">
-            <label for="erc1155LogChunk">Event log chunk size</label>
-            <input id="erc1155LogChunk" type="number" min="100" step="100" value="20000" />
-          </div>
-        </div>
-        <div style="font-size:11px;color:var(--muted)">
-          Scans only this ERC-1155 contract's TransferSingle/TransferBatch events involving your wallet, then verifies current balances.
-        </div>
-      </details>
 
       <div class="field">
         <label for="readRpc">Read-only RPC override <span style="font-weight:400">(optional)</span></label>
@@ -383,36 +348,6 @@ const READ_RPC_PRESETS = {
   42161: "https://arbitrum-one-rpc.publicnode.com",
   43114: "https://avalanche-c-chain-rpc.publicnode.com"
 };
-
-const FALLBACK_RPC_POOLS = {
-  1: [
-    {name:"PublicNode Ethereum", url:"https://ethereum-rpc.publicnode.com"},
-    {name:"Cloudflare Ethereum", url:"https://cloudflare-eth.com/v1/mainnet"}
-  ],
-  8453: [
-    {name:"Base Official", url:"https://mainnet.base.org"},
-    {name:"PublicNode Base", url:"https://base-rpc.publicnode.com"}
-  ],
-  42161: [
-    {name:"PublicNode Arbitrum", url:"https://arbitrum-one-rpc.publicnode.com"}
-  ],
-  10: [
-    {name:"PublicNode Optimism", url:"https://optimism-rpc.publicnode.com"}
-  ],
-  137: [
-    {name:"PublicNode Polygon", url:"https://polygon-bor-rpc.publicnode.com"}
-  ],
-  56: [
-    {name:"PublicNode BNB", url:"https://bsc-rpc.publicnode.com"}
-  ],
-  43114: [
-    {name:"PublicNode Avalanche", url:"https://avalanche-c-chain-rpc.publicnode.com"}
-  ],
-  4663: [
-    {name:"Robinhood Official", url:"https://rpc.mainnet.chain.robinhood.com"}
-  ]
-};
-
 
 const DESTINATION_PRESETS = [
   { label: "FE2D", address: "0x000000000000000000000000000000000000FE2D", note: "Preset wallet" },
@@ -590,7 +525,6 @@ function restoreURLState(){const u=new URL(location.href);const c=u.searchParams
 
 const el = id => document.getElementById(id);
 let provider, readProvider, signer, account, chainId, standard = null, collectionContract = null;
-let lastSuccessfulReadSource = null;
 let holdings = [];
 let helperVerified = false;
 let ownershipCheckStopRequested = false;
@@ -639,109 +573,6 @@ function resetCollection(){
   updateTransferButtons();
 }
 
-
-function providerLabelFromUrl(url){
-  if (!url) return "wallet provider";
-  try {
-    const host = new URL(url).hostname;
-    return host;
-  } catch {
-    return url;
-  }
-}
-
-async function makeStaticJsonProvider(url){
-  const p = new ethers.JsonRpcProvider(url, chainId, {staticNetwork:true});
-  const n = await p.getNetwork();
-  if (Number(n.chainId) !== Number(chainId)) {
-    throw new Error(`RPC ${url} returned chain ${n.chainId}, expected ${chainId}.`);
-  }
-  return p;
-}
-
-async function buildReadProviderCandidates(){
-  const candidates = [];
-  const seen = new Set();
-
-  const add = (name, p, url=null) => {
-    const key = url ? `url:${url}` : `provider:${name}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    candidates.push({name, provider:p, url});
-  };
-
-  const manual = el("readRpc")?.value?.trim();
-  if (manual) {
-    try {
-      add(`Manual · ${providerLabelFromUrl(manual)}`, await makeStaticJsonProvider(manual), manual);
-    } catch(e) {
-      console.warn("Manual read RPC candidate failed setup", e);
-    }
-  }
-
-  // Current configured readProvider next.
-  if (readProvider) {
-    const configuredUrl = preferredReadRpc();
-    add(
-      configuredUrl ? `Configured · ${providerLabelFromUrl(configuredUrl)}` : "Configured read provider",
-      readProvider,
-      configuredUrl || null
-    );
-  }
-
-  // Wallet provider is intentionally included before public fallbacks.
-  if (provider) add("Wallet provider", provider, null);
-
-  const pool = FALLBACK_RPC_POOLS[chainId] || [];
-  for (const item of pool) {
-    try {
-      add(item.name, await makeStaticJsonProvider(item.url), item.url);
-    } catch(e) {
-      console.warn(`Skipping fallback RPC ${item.name}`, e);
-    }
-  }
-
-  return candidates;
-}
-
-function rpcFailureLooksAccessRelated(error){
-  const msg = extractErrorMessage(error).toLowerCase();
-  return (
-    msg.includes("403") ||
-    msg.includes("401") ||
-    msg.includes("forbidden") ||
-    msg.includes("unauthorized") ||
-    msg.includes("failed to fetch") ||
-    msg.includes("cors")
-  );
-}
-
-async function getLogsWithProviderFallback(filter, fromBlock, toBlock){
-  const candidates = await buildReadProviderCandidates();
-  const errors = [];
-
-  for (const candidate of candidates) {
-    try {
-      const logs = await candidate.provider.getLogs({
-        ...filter,
-        fromBlock,
-        toBlock
-      });
-
-      lastSuccessfulReadSource = candidate.name;
-      if (el("activeReadRpc")) el("activeReadRpc").textContent = candidate.name;
-      return {logs, source:candidate.name};
-    } catch(e) {
-      errors.push(`${candidate.name}: ${extractErrorMessage(e)}`);
-      console.warn(`RPC candidate failed: ${candidate.name}`, e);
-    }
-  }
-
-  const combined = errors.slice(-6).join("\n");
-  throw new Error(`All available RPC providers failed for eth_getLogs.\n${combined}`);
-}
-
-
 function preferredReadRpc(){
   const manual = el("readRpc")?.value?.trim();
   if (manual) return manual;
@@ -751,8 +582,6 @@ async function configureReadProvider(){
   const rpc = preferredReadRpc();
   if (!rpc) {
     readProvider = provider;
-    lastSuccessfulReadSource = "Wallet provider";
-    if (el("activeReadRpc")) el("activeReadRpc").textContent = lastSuccessfulReadSource;
     return {source:"wallet", rpc:null};
   }
   try {
@@ -763,15 +592,11 @@ async function configureReadProvider(){
     }
     await p.getBlockNumber();
     readProvider = p;
-    lastSuccessfulReadSource = providerLabelFromUrl(rpc);
-    if (el("activeReadRpc")) el("activeReadRpc").textContent = lastSuccessfulReadSource;
     return {source:"rpc", rpc};
   } catch (e) {
     if (el("readRpc")?.value?.trim()) throw e;
     // Automatic preset failed: safely fall back to wallet provider.
     readProvider = provider;
-    lastSuccessfulReadSource = "Wallet provider";
-    if (el("activeReadRpc")) el("activeReadRpc").textContent = lastSuccessfulReadSource;
     return {source:"wallet-fallback", rpc};
   }
 }
@@ -925,7 +750,7 @@ function requestOwnershipCheckStop(){
   el("stopCheckBtn").disabled = true;
   setStatus(
     el("loadStatus"),
-    "Stop requested. Finishing the current contract/RPC batch, then the check will stop and keep any holdings already found.",
+    "Stop requested. Finishing the current contract-call batch, then the check will stop and keep any holdings already found.",
     "warn"
   );
 }
@@ -1007,148 +832,6 @@ async function loadERC721ByRange(address){
   }
   return finalOwned;
 }
-
-
-async function getContractLogsAdaptive(baseFilter, start, end, initialChunk, label){
-  let cursor = start;
-  let chunk = Math.max(100, initialChunk);
-  const logs = [];
-  beginOwnershipCheck();
-
-  while (cursor <= end){
-    if (ownershipCheckStopRequested) break;
-
-    const toBlock = Math.min(end, cursor + chunk - 1);
-
-    try {
-      const result = await getLogsWithProviderFallback(baseFilter, cursor, toBlock);
-      const part = result.logs;
-      logs.push(...part);
-      cursor = toBlock + 1;
-
-      setStatus(
-        el("loadStatus"),
-        `${label}\nBlocks ${start.toLocaleString()} → ${end.toLocaleString()}\nReached ${Math.min(cursor,end).toLocaleString()} · ${logs.length} matching events`,
-        "warn"
-      );
-
-      if (part.length < 100 && chunk < initialChunk){
-        chunk = Math.min(initialChunk, chunk * 2);
-      }
-    } catch(e){
-      if (chunk <= 100){
-        endOwnershipCheck();
-        throw new Error(`ERC-1155 contract event query failed at a 100-block window. ${extractErrorMessage(e)}\n\nTry another read-only RPC, use a later contract scan start block, or use Manual token IDs.`);
-      }
-      chunk = Math.max(100, Math.floor(chunk / 2));
-    }
-  }
-
-  return logs;
-}
-
-async function discoverERC1155Holdings(address){
-  const latest = await rp().getBlockNumber();
-  const start = Math.max(0, Number(el("erc1155StartBlock").value || 0));
-  const chunk = Math.max(100, Number(el("erc1155LogChunk").value || 20000));
-
-  if (start > latest){
-    throw new Error(`ERC-1155 start block ${start} is above current block ${latest}.`);
-  }
-
-  const iface = new ethers.Interface(ERC1155_ABI);
-  const singleTopic = iface.getEvent("TransferSingle").topicHash;
-  const batchTopic = iface.getEvent("TransferBatch").topicHash;
-  const acctTopic = topicAddress(account);
-
-  const queries = [
-    ["TransferSingle sent by wallet", {address, topics:[singleTopic, null, acctTopic]}],
-    ["TransferSingle received by wallet", {address, topics:[singleTopic, null, null, acctTopic]}],
-    ["TransferBatch sent by wallet", {address, topics:[batchTopic, null, acctTopic]}],
-    ["TransferBatch received by wallet", {address, topics:[batchTopic, null, null, acctTopic]}]
-  ];
-
-  const candidateIds = [];
-
-  for (const [label, filter] of queries){
-    if (ownershipCheckStopRequested) break;
-
-    const logs = await getContractLogsAdaptive(
-      filter,
-      start,
-      latest,
-      chunk,
-      `Scanning this ERC-1155 contract: ${label}…`
-    );
-
-    for (const log of logs){
-      try {
-        const parsed = iface.parseLog(log);
-
-        if (parsed.name === "TransferSingle"){
-          candidateIds.push(BigInt(parsed.args.id));
-        } else if (parsed.name === "TransferBatch"){
-          for (const id of parsed.args.ids){
-            candidateIds.push(BigInt(id));
-          }
-        }
-      } catch {}
-    }
-  }
-
-  const ids = uniqBigints(candidateIds);
-  const owned = [];
-  const contract = new ethers.Contract(address, ERC1155_ABI, rp());
-
-  for (let i = 0; i < ids.length; i += 100){
-    if (ownershipCheckStopRequested) break;
-
-    const slice = ids.slice(i, i + 100);
-    let balances;
-
-    try {
-      balances = await contract.balanceOfBatch(slice.map(() => account), slice);
-    } catch {
-      balances = await Promise.all(slice.map(id => contract.balanceOf(account, id)));
-    }
-
-    slice.forEach((id, j) => {
-      const balance = BigInt(balances[j]);
-      if (balance > 0n){
-        owned.push({id, balance, amount: balance, selected: false});
-      }
-    });
-
-    holdings = owned.slice().sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
-    renderHoldings();
-
-    setStatus(
-      el("loadStatus"),
-      `Verifying ERC-1155 balances…\nChecked ${Math.min(i+100, ids.length)} / ${ids.length} candidate token IDs · ${owned.length} currently owned`,
-      "warn"
-    );
-  }
-
-  const stopped = ownershipCheckStopRequested;
-  endOwnershipCheck();
-
-  if (stopped){
-    setStatus(
-      el("loadStatus"),
-      `ERC-1155 discovery stopped. Kept ${owned.length} currently-owned token ID${owned.length===1?"":"s"} found so far.`,
-      "warn"
-    );
-  } else {
-    setStatus(
-      el("loadStatus"),
-      `ERC-1155 auto-discovery complete. Found ${owned.length} currently-owned token ID${owned.length===1?"":"s"} in this collection.`,
-      "ok"
-    );
-  }
-
-  return owned;
-}
-
 
 async function loadERC1155ManualOnly(address){
   setStatus(
@@ -1240,7 +923,7 @@ setStatus(el("loadStatus"), "Detecting NFT standard…");
     collectionContract = new ethers.Contract(address, ERC1155_ABI, signer);
     el("erc1155Controls").classList.remove("hidden");
     el("erc721Controls").classList.add("hidden");
-    holdings = await discoverERC1155Holdings(address);
+    holdings = await loadERC1155ManualOnly(address);
   }
 renderHoldings();
   enrichMetadata(address);
