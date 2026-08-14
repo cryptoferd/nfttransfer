@@ -24,3 +24,15 @@ On Robinhood Chain (4663), the checker defaults to:
 The Stop Check button remains cooperative: it stops after the current in-flight batch finishes and preserves holdings already found.
 
 For other chains, the default remains 20 reads per batch with no artificial delay unless the user changes the batch-size field.
+
+
+## v13 — nonexistent ERC-721 token handling
+
+Some ERC-721 collections have gaps, burned token IDs, reserved ranges, or IDs that were never minted. Calling `ownerOf()` on those IDs is expected to revert.
+
+v13 explicitly recognizes and skips common nonexistent-token custom errors:
+
+- `0xdf2d9b42` — ERC721A `OwnerQueryForNonexistentToken()`
+- `0x7e273289` — OpenZeppelin v5 `ERC721NonexistentToken(uint256)`
+
+These reverts are now treated as a normal "token does not exist" result inside the checker rather than a failed batch or RPC error.

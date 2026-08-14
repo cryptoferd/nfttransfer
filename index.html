@@ -128,7 +128,7 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">v12 · client-side only</div>
+    <div class="badge">v13 · client-side only</div>
   </div>
 
   <div class="grid">
@@ -548,6 +548,47 @@ function sleep(ms){
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+
+function checkerRevertSelector(error){
+  const values = [
+    error?.data,
+    error?.info?.error?.data,
+    error?.error?.data,
+    error?.cause?.data
+  ];
+
+  for (const value of values){
+    if (typeof value === "string" && /^0x[0-9a-fA-F]{8}/.test(value)) {
+      return value.slice(0, 10).toLowerCase();
+    }
+
+    if (value && typeof value === "object"){
+      const nested = value.data || value.result;
+      if (typeof nested === "string" && /^0x[0-9a-fA-F]{8}/.test(nested)) {
+        return nested.slice(0, 10).toLowerCase();
+      }
+    }
+  }
+
+  const text = [
+    error?.message,
+    error?.shortMessage,
+    error?.reason
+  ].filter(Boolean).join(" ");
+
+  const match = text.match(/0x[0-9a-fA-F]{8}/);
+  return match ? match[0].toLowerCase() : null;
+}
+
+function isNonexistentERC721TokenError(error){
+  const selector = checkerRevertSelector(error);
+
+  // ERC721A: OwnerQueryForNonexistentToken()
+  // OpenZeppelin v5: ERC721NonexistentToken(uint256)
+  return selector === "0xdf2d9b42" ||
+         selector === "0x7e273289";
+}
+
 function isRateLimitError(error){
   const text = [
     error?.message,
@@ -588,6 +629,12 @@ async function withCheckerRetry(task, label="contract read"){
       return await task();
     } catch (error) {
       lastError = error;
+
+      // ownerOf() is expected to revert for gaps, burned IDs, or IDs that were never minted.
+      // Treat these as a normal "token does not exist" result instead of a checker failure.
+      if (isNonexistentERC721TokenError(error)) {
+        return null;
+      }
 
       if (isFetchOrCorsError(error) && readProvider !== provider) {
         readProvider = provider;
@@ -893,6 +940,8 @@ async function loadERC721ByRange(address){
           () => c.ownerOf(id),
           `token #${id}`
         );
+
+        if (!owner) return null;
         return owner.toLowerCase() === account.toLowerCase() ? id : null;
       } catch (error) {
         // Nonexistent/burned IDs are expected on many collections.
@@ -919,7 +968,7 @@ async function loadERC721ByRange(address){
     if (ownershipCheckStopRequested) break;
     setStatus(
       el("loadStatus"),
-      `Checking this collection contract only…\nToken IDs ${start} → ${end}\nChecked ${checked} / ${count} · Found ${owned.length} owned`,
+      `Checking this collection contract only…\nToken IDs ${start} → ${end}\nChecked ${checked} / ${count} · Found ${owned.length} owned\nNonexistent / burned token IDs are skipped automatically.`,
       "warn"
     );
   }
