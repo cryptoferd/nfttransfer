@@ -128,14 +128,21 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">v14 · client-side only</div>
+    <div class="badge">v16 · client-side only</div>
   </div>
 
   <div class="grid">
     <section class="card">
       <h2>1. Connect & load collection</h2>
+      <div class="field">
+        <label for="walletProviderSelect">Wallet provider</label>
+        <select id="walletProviderSelect">
+          <option value="">Auto-detect wallet</option>
+        </select>
+      </div>
       <div class="buttons">
         <button id="connectBtn" class="primary">Connect Wallet</button>
+        <button id="disconnectBtn" class="danger" disabled>Disconnect</button>
         <button id="refreshBtn" disabled>Refresh Network</button>
       </div>
       <div class="statline">
@@ -592,6 +599,8 @@ function restoreURLState(){const u=new URL(location.href);const c=u.searchParams
 
 const el = id => document.getElementById(id);
 let provider, readProvider, signer, account, chainId, standard = null, collectionContract = null;
+let selectedEip1193Provider = null;
+let discoveredWalletProviders = [];
 let lastSuccessfulReadSource = null;
 let walletCapabilities = null;
 let walletBatchSupported = false;
@@ -865,7 +874,7 @@ async function detectWalletBatchCapabilities(){
   const info = el("walletBatchInfo");
 
   try {
-    const raw = await window.ethereum.request({
+    const raw = await selectedEip1193Provider.request({
       method: "wallet_getCapabilities",
       params: [account]
     });
@@ -926,7 +935,7 @@ async function sendWalletBatchCalls(to, items){
     });
   } catch(first){
     try {
-      return await window.ethereum.request({
+      return await selectedEip1193Provider.request({
         method:"wallet_sendCalls",
         params:[{chainId:hexChainId(),from:account,calls}]
       });
@@ -947,9 +956,135 @@ async function getWalletBatchStatus(id){
   }
 }
 
+
+function providerDisplayName(entry, index){
+  return entry?.info?.name || entry?.info?.rdns || `Wallet ${index + 1}`;
+}
+
+function renderWalletProviderOptions(){
+  const select = el("walletProviderSelect");
+  if (!select) return;
+
+  const current = select.value;
+  select.innerHTML = `<option value="">Auto-detect wallet</option>`;
+
+  discoveredWalletProviders.forEach((entry, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = providerDisplayName(entry, index);
+    select.appendChild(option);
+  });
+
+  if (current && Number(current) < discoveredWalletProviders.length){
+    select.value = current;
+  }
+}
+
+function startWalletProviderDiscovery(){
+  discoveredWalletProviders = [];
+
+  window.addEventListener("eip6963:announceProvider", (event) => {
+    const detail = event?.detail;
+    if (!detail?.provider || !detail?.info) return;
+
+    const duplicate = discoveredWalletProviders.some(x =>
+      x.info?.uuid === detail.info.uuid ||
+      (x.info?.rdns && x.info.rdns === detail.info.rdns)
+    );
+    if (duplicate) return;
+
+    discoveredWalletProviders.push(detail);
+    renderWalletProviderOptions();
+  });
+
+  window.dispatchEvent(new Event("eip6963:requestProvider"));
+
+  // Fallback for older injected wallets that do not announce EIP-6963.
+  setTimeout(() => {
+    if (!discoveredWalletProviders.length && window.ethereum) {
+      discoveredWalletProviders.push({
+        info: {name:"Injected Wallet", rdns:"legacy.injected"},
+        provider: window.ethereum
+      });
+      renderWalletProviderOptions();
+    }
+  }, 300);
+}
+
+function getSelectedInjectedProvider(){
+  const select = el("walletProviderSelect");
+  const value = select?.value ?? "";
+
+  if (value !== ""){
+    const entry = discoveredWalletProviders[Number(value)];
+    if (entry?.provider) return entry.provider;
+  }
+
+  if (discoveredWalletProviders.length === 1){
+    return discoveredWalletProviders[0].provider;
+  }
+
+  if (window.ethereum) return window.ethereum;
+  return null;
+}
+
+async function disconnectWallet(){
+  // EIP-1193 itself has no universal "disconnect account" RPC for injected wallets.
+  // We clear all app-side wallet state and detach listeners. The extension remains installed.
+  if (selectedEip1193Provider?.removeListener){
+    try { selectedEip1193Provider.removeListener("accountsChanged", handleAccountsChanged); } catch {}
+    try { selectedEip1193Provider.removeListener("chainChanged", handleChainChanged); } catch {}
+  }
+
+  selectedEip1193Provider = null;
+  provider = null;
+  readProvider = null;
+  signer = null;
+  account = null;
+  chainId = null;
+  collectionContract = null;
+  standard = null;
+  walletCapabilities = null;
+  walletBatchSupported = false;
+  holdings = [];
+
+  el("walletStat").textContent = "Not connected";
+  el("chainStat").textContent = "—";
+  if (el("activeReadRpc")) el("activeReadRpc").textContent = "—";
+  el("connectBtn").disabled = false;
+  el("disconnectBtn").disabled = true;
+  enableConnected(false);
+  resetCollection();
+
+  if (el("walletBatchOption")){
+    el("walletBatchOption").disabled = true;
+    el("walletBatchOption").textContent = "Wallet Batch — unavailable";
+  }
+  if (el("walletBatchInfo")){
+    el("walletBatchInfo").textContent = "Wallet Batch support will be checked after connecting.";
+  }
+
+  setStatus(el("loadStatus"), "Disconnected from the current wallet in this app. Choose another provider and connect.", "ok");
+}
+
+function handleAccountsChanged(accounts){
+  if (!accounts || !accounts.length){
+    disconnectWallet();
+    return;
+  }
+  location.reload();
+}
+
+function handleChainChanged(){
+  location.reload();
+}
+
+
 async function connect(){
-  if (!window.ethereum) throw new Error("No injected EVM wallet found. Install or open this page inside MetaMask, Rabby, Coinbase Wallet, etc.");
-  provider = new ethers.BrowserProvider(window.ethereum);
+  selectedEip1193Provider = getSelectedInjectedProvider();
+  if (!selectedEip1193Provider) throw new Error("No injected EVM wallet provider found. Install Rabby, MetaMask, Coinbase Wallet, or another EVM wallet.");
+
+  provider = new ethers.BrowserProvider(selectedEip1193Provider);
   await provider.send("eth_requestAccounts", []);
   signer = await provider.getSigner();
   account = await signer.getAddress();
@@ -963,7 +1098,20 @@ async function connect(){
   el("walletStat").title = account;
   el("chainStat").textContent = `${chainInfo().name} (${chainId})`;
   enableConnected(true);
-  setStatus(el("loadStatus"), `Connected: ${account}\nChain ID: ${chainId}`, "ok");
+  el("connectBtn").disabled = true;
+  el("disconnectBtn").disabled = false;
+
+  if (selectedEip1193Provider?.on){
+    selectedEip1193Provider.on("accountsChanged", handleAccountsChanged);
+    selectedEip1193Provider.on("chainChanged", handleChainChanged);
+  }
+
+  const selectedIndex = el("walletProviderSelect")?.value;
+  const walletName = selectedIndex !== "" && discoveredWalletProviders[Number(selectedIndex)]
+    ? providerDisplayName(discoveredWalletProviders[Number(selectedIndex)], Number(selectedIndex))
+    : "Connected wallet";
+
+  setStatus(el("loadStatus"), `${walletName}\nConnected: ${account}\nChain ID: ${chainId}`, "ok");
 }
 async function refreshNetwork(){
   if (!window.ethereum) return;
@@ -1298,7 +1446,7 @@ function renderHoldings(){
       <div class="tokenId">#${item.id}</div>
       <div class="tokenName">${item.name || `Token #${item.id}`}</div>
       <div class="tokenMeta">${standard === "ERC1155" ? `Balance: ${item.balance}` : "ERC-721"}${item.metadataState && item.metadataState !== "loaded" ? ` · ${item.metadataState}` : ""}</div>
-      ${standard === "ERC1155" ? `<div class="amount"><label>Send amount</label><input type="number" min="1" max="${item.balance}" value="${item.amount ?? item.balance}" data-amount></div>` : ""}
+      ${standard === "ERC1155" ? `<div class="amount"><label>Send amount</label><input type="number" min="1" max="${item.balance ?? 0}" value="${item.amount ?? item.balance ?? 0}" data-amount></div>` : ""}
     `;
     const img = div.querySelector("img.thumb");
     if (img) img.addEventListener("error", () => {
@@ -1315,7 +1463,10 @@ function renderHoldings(){
       item.selected = !item.selected; checkbox.checked = item.selected; div.classList.toggle("selected", item.selected); updateTransferButtons();
     });
     const amount = div.querySelector("[data-amount]");
-    if (amount) amount.addEventListener("input", () => item.amount = BigInt(amount.value || 0));
+    if (amount) amount.addEventListener("input", () => {
+      try { item.amount = BigInt(amount.value || "0"); }
+      catch { item.amount = item.balance ?? 0n; }
+    });
     grid.appendChild(div);
   }
   el("selectMaxBtn").disabled = holdings.length === 0;
@@ -1453,10 +1604,19 @@ async function selectMaxForSingleTransaction(){
   if (!account || !provider) throw new Error("Connect your wallet first.");
   if (!holdings.length) throw new Error("Load a collection first.");
   if (standard !== "ERC721") {
-    // ERC-1155 already has a native batch function; select everything and rely on preflight.
-    holdings.forEach(x => x.selected = true);
+    // Refresh live ERC-1155 balances before selecting.
+    const refreshed = await refreshSelectedERC1155Balances(
+      holdings.map(x => ({...x, selected:true}))
+    );
+    const liveMap = new Map(refreshed.map(x => [x.id.toString(), x]));
+    holdings = holdings
+      .map(x => {
+        const live = liveMap.get(x.id.toString());
+        return live ? {...x, balance:live.balance, amount:live.amount, selected:true} : {...x, balance:0n, amount:0n, selected:false};
+      })
+      .filter(x => x.balance > 0n);
     renderHoldings();
-    setStatus(el("transferStatus"), `Selected all ${holdings.length} ERC-1155 token IDs. Run Preflight Selected to confirm the native batch fits.`, "ok");
+    setStatus(el("transferStatus"), `Selected all ${holdings.length} currently-owned ERC-1155 token IDs using freshly-read balances. Run Preflight Selected to confirm the native batch fits.`, "ok");
     return;
   }
 
@@ -1767,6 +1927,78 @@ async function diagnoseSelectedTransfer(){
 }
 
 
+
+async function refreshSelectedERC1155Balances(items){
+  if (standard !== "ERC1155") return items;
+  if (!items.length) return items;
+
+  const address = el("collection").value.trim();
+  const c = new ethers.Contract(address, ERC1155_ABI, rp());
+  const ids = items.map(x => BigInt(x.id));
+
+  let balances;
+  try {
+    balances = await c.balanceOfBatch(
+      ids.map(() => account),
+      ids
+    );
+  } catch {
+    balances = await Promise.all(
+      ids.map(id => c.balanceOf(account, id))
+    );
+  }
+
+  const refreshed = [];
+
+  items.forEach((item, i) => {
+    const liveBalance = BigInt(balances[i] ?? 0);
+
+    // Keep the canonical holding object repaired as well.
+    item.balance = liveBalance;
+
+    if (liveBalance <= 0n) {
+      item.amount = 0n;
+      item.selected = false;
+      return;
+    }
+
+    let requested;
+    try {
+      requested = item.amount === undefined || item.amount === null
+        ? liveBalance
+        : BigInt(item.amount);
+    } catch {
+      requested = liveBalance;
+    }
+
+    if (requested <= 0n) requested = liveBalance;
+    if (requested > liveBalance) requested = liveBalance;
+
+    item.amount = requested;
+    refreshed.push(item);
+  });
+
+  return refreshed;
+}
+
+async function prepareERC1155TransferItems(){
+  let items = selectedItems();
+  if (!items.length) throw new Error("Select at least one token.");
+
+  items = await refreshSelectedERC1155Balances(items);
+
+  // Remove zero-balance entries from the visible holdings list.
+  holdings = holdings.filter(x => standard !== "ERC1155" || BigInt(x.balance ?? 0) > 0n);
+  renderHoldings();
+
+  if (!items.length) {
+    throw new Error("None of the selected ERC-1155 token IDs currently have a transferable balance.");
+  }
+
+  return items;
+}
+
+
 function validateTransfer(){
   const to = el("recipient").value.trim();
   if (!validAddress(to)) throw new Error("Enter a valid destination wallet.");
@@ -1776,14 +2008,18 @@ function validateTransfer(){
   if (!items.length) throw new Error("Select at least one token.");
   if (standard === "ERC1155"){
     for (const x of items){
-      const a = BigInt(x.amount ?? x.balance);
-      if (a <= 0n || a > BigInt(x.balance)) throw new Error(`Invalid amount for token #${x.id}.`);
+      const balance = BigInt(x.balance ?? 0);
+      const a = BigInt(x.amount ?? balance);
+      if (a <= 0n || a > balance) throw new Error(`Invalid amount for token #${x.id}.`);
     }
   }
   return {to, items};
 }
 async function preflight(){
-  const {to, items} = validateTransfer();
+  let {to, items} = validateTransfer();
+  if (standard === "ERC1155") {
+    items = await prepareERC1155TransferItems();
+  }
   setStatus(el("transferStatus"), "Running preflight checks…", "warn");
   if (standard === "ERC721"){
     const mode = el("erc721Mode").value;
@@ -1813,14 +2049,17 @@ async function preflight(){
       setStatus(el("transferStatus"), `Batch preflight passed for ${items.length} ERC-721 tokens.\nEstimated gas units: ${gas}\nConfigured limit: ${maxGas}`, "ok");
     }
   } else {
-    const ids = items.map(x=>x.id), amounts = items.map(x=>BigInt(x.amount ?? x.balance));
+    const ids = items.map(x=>BigInt(x.id)), amounts = items.map(x=>BigInt(x.amount ?? x.balance ?? 0));
     await collectionContract.safeBatchTransferFrom.staticCall(account,to,ids,amounts,"0x");
     const gas = await collectionContract.safeBatchTransferFrom.estimateGas(account,to,ids,amounts,"0x");
     setStatus(el("transferStatus"), `ERC-1155 batch preflight passed for ${items.length} token IDs.\nEstimated gas units: ${gas}`, "ok");
   }
 }
 async function transfer(){
-  const {to, items} = validateTransfer();
+  let {to, items} = validateTransfer();
+  if (standard === "ERC1155") {
+    items = await prepareERC1155TransferItems();
+  }
   const collection=el("collection").value.trim();
   if(!confirm(`NETWORK: ${chainInfo().name} (chain ${chainId})\nCOLLECTION: ${collection}\nRECIPIENT: ${to}\nTOKENS: ${items.length}\n\nThis transfer is irreversible. Continue?`)) return;
 
@@ -1865,13 +2104,18 @@ async function transfer(){
       setStatus(el("transferStatus"), `Batch complete. ${items.length} ERC-721 tokens transferred in one batch call.`, "ok");
     }
   } else {
-    const ids = items.map(x=>x.id), amounts = items.map(x=>BigInt(x.amount ?? x.balance));
+    const ids = items.map(x=>BigInt(x.id)), amounts = items.map(x=>BigInt(x.amount ?? x.balance ?? 0));
     setStatus(el("transferStatus"), `Submitting ERC-1155 batch for ${items.length} token IDs…`, "warn");
     const tx = await collectionContract.safeBatchTransferFrom(account,to,ids,amounts,"0x");
     setStatus(el("transferStatus"), `Batch submitted:\n${tx.hash}\nWaiting for confirmation…`, "warn");
     await tx.wait();
-    items.forEach((x,i)=> { x.balance -= amounts[i]; x.amount = x.balance; x.selected=false; });
-    holdings = holdings.filter(x=>x.balance>0n);
+    items.forEach((x,i)=> {
+      const current = BigInt(x.balance ?? 0);
+      x.balance = current > amounts[i] ? current - amounts[i] : 0n;
+      x.amount = x.balance;
+      x.selected = false;
+    });
+    holdings = holdings.filter(x=>BigInt(x.balance ?? 0) > 0n);
     renderHoldings();
     setStatus(el("transferStatus"), `ERC-1155 batch complete. ${items.length} token IDs transferred.`, "ok");
   }
@@ -1890,6 +2134,10 @@ const msg = extractErrorMessage(e);
 }
 
 el("connectBtn").addEventListener("click", wrap(connect));
+el("disconnectBtn").addEventListener("click", wrap(disconnectWallet));
+el("walletProviderSelect").addEventListener("change", async () => {
+  if (account) await disconnectWallet();
+});
 el("refreshBtn").addEventListener("click", wrap(refreshNetwork));
 el("testRpcBtn").addEventListener("click", wrap(testReadRpc));
 el("loadBtn").addEventListener("click", wrap(loadCollection));
@@ -1924,10 +2172,7 @@ updateDestinationPresetState();
 el("collection").addEventListener("change", saveURLState);
 restoreURLState();
 
-if (window.ethereum?.on) {
-  window.ethereum.on("accountsChanged", ()=>location.reload());
-  window.ethereum.on("chainChanged", ()=>location.reload());
-}
+startWalletProviderDiscovery();
 </script>
 </body>
 </html>

@@ -51,3 +51,35 @@ New behavior on Robinhood Chain:
 4. the UI suggests an Alchemy Robinhood endpoint format when an external RPC is desired
 
 Transactions are still signed only by the connected wallet.
+
+
+## v15 — ERC-1155 live-balance transfer fix
+
+Fixes `TypeError: Cannot convert undefined to a BigInt` in ERC-1155 transfers.
+
+Before ERC-1155 preflight or transfer, v15 now:
+1. re-reads all selected token balances directly from the collection
+2. prefers `balanceOfBatch()` and falls back to individual `balanceOf()` calls
+3. repairs missing/stale `balance` values in the UI holding objects
+4. defaults a missing send amount to the current live balance
+5. caps requested amounts to the current live balance
+6. deselects/removes token IDs whose live balance is zero
+7. only then builds `safeBatchTransferFrom()`
+
+This makes the transfer path independent of incomplete/stale discovery metadata.
+
+
+## v16 — disconnect + wallet provider chooser
+
+v16 adds EIP-6963 multi-wallet discovery and app-side disconnect support.
+
+New behavior:
+- detects multiple installed EVM wallet providers when they support EIP-6963
+- shows a Wallet provider dropdown
+- lets the user explicitly choose Rabby, MetaMask, Coinbase Wallet, etc.
+- falls back to legacy `window.ethereum` when needed
+- adds a Disconnect button
+- changing the provider while connected first clears the app's current wallet state
+- wallet batch capability detection uses the selected provider instead of global `window.ethereum`
+
+Note: injected-wallet standards do not define a universal RPC that forcibly disconnects the browser extension account. The Disconnect button clears the application's connection/session state and lets the user choose another provider; the extension itself may still remember site permission.
