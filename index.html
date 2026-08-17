@@ -141,6 +141,7 @@
       <div class="statline">
         <div class="pill">Wallet: <strong id="walletStat">Not connected</strong></div>
         <div class="pill">Chain: <strong id="chainStat">—</strong></div>
+        <div class="pill">Read RPC: <strong id="activeReadRpc">—</strong></div>
       </div>
 
       <div class="sep"></div>
@@ -164,13 +165,27 @@
       <div class="field">
         <label for="readBatchSize">Contract-call batch size</label>
         <input id="readBatchSize" type="number" min="1" max="100" step="1" value="20" />
-        <div id="checkerThrottleNote" style="font-size:11px;color:var(--muted);margin-top:5px">
-          Robinhood automatically uses a smaller batch and delay to avoid public-RPC rate limits.
-        </div>
         <div style="font-size:11px;color:var(--muted);margin-top:5px">
           Used only for ERC-721 collections that do not expose owner enumeration. The app checks <code>ownerOf()</code> directly on this collection contract—no historical blockchain log scan.
         </div>
       </div>
+
+      <details style="margin-bottom:12px">
+        <summary>ERC-1155 auto-discovery settings</summary>
+        <div class="row" style="margin-top:10px">
+          <div class="field">
+            <label for="erc1155StartBlock">Contract scan start block</label>
+            <input id="erc1155StartBlock" type="number" min="0" step="1" value="0" />
+          </div>
+          <div class="field">
+            <label for="erc1155LogChunk">Event log chunk size</label>
+            <input id="erc1155LogChunk" type="number" min="100" step="100" value="20000" />
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--muted)">
+          Scans only this ERC-1155 contract's TransferSingle/TransferBatch events involving your wallet, then verifies current balances.
+        </div>
+      </details>
 
       <div class="field">
         <label for="readRpc">Read-only RPC override <span style="font-weight:400">(optional)</span></label>
@@ -179,6 +194,23 @@
           Used only for contract reads. Your connected wallet still signs every transaction.
         </div>
       </div>
+
+      <details style="margin-bottom:12px">
+        <summary>ERC-1155 auto-discovery settings</summary>
+        <div class="row" style="margin-top:10px">
+          <div class="field">
+            <label for="erc1155StartBlock">Contract scan start block</label>
+            <input id="erc1155StartBlock" type="number" min="0" step="1" value="0" />
+          </div>
+          <div class="field">
+            <label for="erc1155LogChunk">Event log chunk size</label>
+            <input id="erc1155LogChunk" type="number" min="100" step="100" value="20000" />
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--muted)">
+          Scans only this ERC-1155 contract's TransferSingle/TransferBatch events involving your wallet, then verifies current balances.
+        </div>
+      </details>
 
       <div class="field">
         <label for="readRpc">Read-only RPC override <span style="font-weight:400">(optional)</span></label>
@@ -233,8 +265,14 @@
         <select id="erc721Mode">
           <option value="direct">Direct — one wallet transaction per NFT</option>
           <option value="helper">Batch helper — one approval + one batch transaction</option>
+          <option value="walletbatch" id="walletBatchOption" disabled>Wallet Batch — unavailable</option>
         </select>
+        <div id="walletBatchInfo" style="font-size:11px;color:var(--muted);margin-top:6px">Wallet Batch support will be checked after connecting.</div>
+        <button id="recheckWalletBatchBtn" type="button" class="ghost" style="margin-top:6px">Recheck Wallet Batch Support</button>
 
+        <div id="walletBatchControls" class="hidden" style="margin-top:12px">
+          <div class="success">Wallet Batch uses <code>wallet_sendCalls</code> so compatible wallets can submit multiple direct NFT contract calls without the helper contract.</div>
+        </div>
         <div id="helperControls" class="hidden" style="margin-top:12px">
           <div class="field">
             <label for="helperAddress">Deployed BatchNFTSender helper address</label>
@@ -352,6 +390,36 @@ const READ_RPC_PRESETS = {
   43114: "https://avalanche-c-chain-rpc.publicnode.com"
 };
 
+const FALLBACK_RPC_POOLS = {
+  1: [
+    {name:"PublicNode Ethereum", url:"https://ethereum-rpc.publicnode.com"},
+    {name:"Cloudflare Ethereum", url:"https://cloudflare-eth.com/v1/mainnet"}
+  ],
+  8453: [
+    {name:"Base Official", url:"https://mainnet.base.org"},
+    {name:"PublicNode Base", url:"https://base-rpc.publicnode.com"}
+  ],
+  42161: [
+    {name:"PublicNode Arbitrum", url:"https://arbitrum-one-rpc.publicnode.com"}
+  ],
+  10: [
+    {name:"PublicNode Optimism", url:"https://optimism-rpc.publicnode.com"}
+  ],
+  137: [
+    {name:"PublicNode Polygon", url:"https://polygon-bor-rpc.publicnode.com"}
+  ],
+  56: [
+    {name:"PublicNode BNB", url:"https://bsc-rpc.publicnode.com"}
+  ],
+  43114: [
+    {name:"PublicNode Avalanche", url:"https://avalanche-c-chain-rpc.publicnode.com"}
+  ],
+  4663: [
+    {name:"Robinhood Official", url:"https://rpc.mainnet.chain.robinhood.com"}
+  ]
+};
+
+
 const DESTINATION_PRESETS = [
   { label: "FE2D", address: "0x000000000000000000000000000000000000FE2D", note: "Preset wallet" },
   { label: "dead", address: "0x000000000000000000000000000000000000dEaD", note: "Burn / dead address" },
@@ -360,7 +428,6 @@ const DESTINATION_PRESETS = [
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 const BATCH_HELPER_DEPLOYMENTS = {
-  1: "0x1D4671d55C894d2a166a0aDc9720faBb76f5FfB1", // Ethereum Mainnet
   4663: "0x19466Dd578cAB78BfcC3f776531598c1473d32ab", // Robinhood Chain
   8453: "0x1d4f7624139d337A31cf08DB065Ec7F4Bd698C22"  // Base
 };
@@ -529,141 +596,13 @@ function restoreURLState(){const u=new URL(location.href);const c=u.searchParams
 
 const el = id => document.getElementById(id);
 let provider, readProvider, signer, account, chainId, standard = null, collectionContract = null;
+let lastSuccessfulReadSource = null;
+let walletCapabilities = null;
+let walletBatchSupported = false;
 let holdings = [];
 let helperVerified = false;
 let ownershipCheckStopRequested = false;
 let ownershipCheckRunning = false;
-
-
-const CHECKER_DEFAULTS = {
-  4663: { batchSize: 5, delayMs: 250, maxRetries: 6 }, // Robinhood Chain
-  default: { batchSize: 20, delayMs: 0, maxRetries: 4 }
-};
-
-function checkerConfig(){
-  return CHECKER_DEFAULTS[chainId] || CHECKER_DEFAULTS.default;
-}
-
-function sleep(ms){
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-
-function checkerRevertSelector(error){
-  const values = [
-    error?.data,
-    error?.info?.error?.data,
-    error?.error?.data,
-    error?.cause?.data
-  ];
-
-  for (const value of values){
-    if (typeof value === "string" && /^0x[0-9a-fA-F]{8}/.test(value)) {
-      return value.slice(0, 10).toLowerCase();
-    }
-
-    if (value && typeof value === "object"){
-      const nested = value.data || value.result;
-      if (typeof nested === "string" && /^0x[0-9a-fA-F]{8}/.test(nested)) {
-        return nested.slice(0, 10).toLowerCase();
-      }
-    }
-  }
-
-  const text = [
-    error?.message,
-    error?.shortMessage,
-    error?.reason
-  ].filter(Boolean).join(" ");
-
-  const match = text.match(/0x[0-9a-fA-F]{8}/);
-  return match ? match[0].toLowerCase() : null;
-}
-
-function isNonexistentERC721TokenError(error){
-  const selector = checkerRevertSelector(error);
-
-  // ERC721A: OwnerQueryForNonexistentToken()
-  // OpenZeppelin v5: ERC721NonexistentToken(uint256)
-  return selector === "0xdf2d9b42" ||
-         selector === "0x7e273289";
-}
-
-function isRateLimitError(error){
-  const text = [
-    error?.message,
-    error?.shortMessage,
-    error?.reason,
-    error?.info?.error?.message,
-    error?.error?.message
-  ].filter(Boolean).join(" ").toLowerCase();
-
-  return text.includes("429") ||
-         text.includes("too many requests") ||
-         text.includes("rate limit") ||
-         text.includes("rate-limit");
-}
-
-function isFetchOrCorsError(error){
-  const text = [
-    error?.message,
-    error?.shortMessage,
-    error?.reason
-  ].filter(Boolean).join(" ").toLowerCase();
-
-  return text.includes("failed to fetch") ||
-         text.includes("cors") ||
-         text.includes("networkerror") ||
-         text.includes("network request failed");
-}
-
-async function withCheckerRetry(task, label="contract read"){
-  const cfg = checkerConfig();
-  let waitMs = 500;
-  let lastError = null;
-
-  for (let attempt = 0; attempt <= cfg.maxRetries; attempt++){
-    if (ownershipCheckStopRequested) throw new Error("Ownership check stopped.");
-
-    try {
-      return await task();
-    } catch (error) {
-      lastError = error;
-
-      // ownerOf() is expected to revert for gaps, burned IDs, or IDs that were never minted.
-      // Treat these as a normal "token does not exist" result instead of a checker failure.
-      if (isNonexistentERC721TokenError(error)) {
-        return null;
-      }
-
-      if (isFetchOrCorsError(error) && readProvider !== provider) {
-        readProvider = provider;
-        setStatus(
-          el("loadStatus"),
-          `Direct read RPC was blocked or unreachable. Falling back to the connected wallet provider for ${label}…`,
-          "warn"
-        );
-        await sleep(250);
-        continue;
-      }
-
-      if (!isRateLimitError(error) || attempt === cfg.maxRetries) {
-        throw error;
-      }
-
-      setStatus(
-        el("loadStatus"),
-        `RPC rate limited while checking ${label}. Waiting ${(waitMs/1000).toFixed(waitMs >= 1000 ? 1 : 2)}s before retry ${attempt + 1}/${cfg.maxRetries}…`,
-        "warn"
-      );
-
-      await sleep(waitMs);
-      waitMs = Math.min(waitMs * 2, 8000);
-    }
-  }
-
-  throw lastError || new Error(`Failed ${label}.`);
-}
 
 function short(a){ return a ? `${a.slice(0,6)}…${a.slice(-4)}` : "—"; }
 function setStatus(node, text, kind=""){
@@ -708,6 +647,109 @@ function resetCollection(){
   updateTransferButtons();
 }
 
+
+function providerLabelFromUrl(url){
+  if (!url) return "wallet provider";
+  try {
+    const host = new URL(url).hostname;
+    return host;
+  } catch {
+    return url;
+  }
+}
+
+async function makeStaticJsonProvider(url){
+  const p = new ethers.JsonRpcProvider(url, chainId, {staticNetwork:true});
+  const n = await p.getNetwork();
+  if (Number(n.chainId) !== Number(chainId)) {
+    throw new Error(`RPC ${url} returned chain ${n.chainId}, expected ${chainId}.`);
+  }
+  return p;
+}
+
+async function buildReadProviderCandidates(){
+  const candidates = [];
+  const seen = new Set();
+
+  const add = (name, p, url=null) => {
+    const key = url ? `url:${url}` : `provider:${name}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({name, provider:p, url});
+  };
+
+  const manual = el("readRpc")?.value?.trim();
+  if (manual) {
+    try {
+      add(`Manual · ${providerLabelFromUrl(manual)}`, await makeStaticJsonProvider(manual), manual);
+    } catch(e) {
+      console.warn("Manual read RPC candidate failed setup", e);
+    }
+  }
+
+  // Current configured readProvider next.
+  if (readProvider) {
+    const configuredUrl = preferredReadRpc();
+    add(
+      configuredUrl ? `Configured · ${providerLabelFromUrl(configuredUrl)}` : "Configured read provider",
+      readProvider,
+      configuredUrl || null
+    );
+  }
+
+  // Wallet provider is intentionally included before public fallbacks.
+  if (provider) add("Wallet provider", provider, null);
+
+  const pool = FALLBACK_RPC_POOLS[chainId] || [];
+  for (const item of pool) {
+    try {
+      add(item.name, await makeStaticJsonProvider(item.url), item.url);
+    } catch(e) {
+      console.warn(`Skipping fallback RPC ${item.name}`, e);
+    }
+  }
+
+  return candidates;
+}
+
+function rpcFailureLooksAccessRelated(error){
+  const msg = extractErrorMessage(error).toLowerCase();
+  return (
+    msg.includes("403") ||
+    msg.includes("401") ||
+    msg.includes("forbidden") ||
+    msg.includes("unauthorized") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("cors")
+  );
+}
+
+async function getLogsWithProviderFallback(filter, fromBlock, toBlock){
+  const candidates = await buildReadProviderCandidates();
+  const errors = [];
+
+  for (const candidate of candidates) {
+    try {
+      const logs = await candidate.provider.getLogs({
+        ...filter,
+        fromBlock,
+        toBlock
+      });
+
+      lastSuccessfulReadSource = candidate.name;
+      if (el("activeReadRpc")) el("activeReadRpc").textContent = candidate.name;
+      return {logs, source:candidate.name};
+    } catch(e) {
+      errors.push(`${candidate.name}: ${extractErrorMessage(e)}`);
+      console.warn(`RPC candidate failed: ${candidate.name}`, e);
+    }
+  }
+
+  const combined = errors.slice(-6).join("\n");
+  throw new Error(`All available RPC providers failed for eth_getLogs.\n${combined}`);
+}
+
+
 function preferredReadRpc(){
   const manual = el("readRpc")?.value?.trim();
   if (manual) return manual;
@@ -717,6 +759,8 @@ async function configureReadProvider(){
   const rpc = preferredReadRpc();
   if (!rpc) {
     readProvider = provider;
+    lastSuccessfulReadSource = "Wallet provider";
+    if (el("activeReadRpc")) el("activeReadRpc").textContent = lastSuccessfulReadSource;
     return {source:"wallet", rpc:null};
   }
   try {
@@ -727,11 +771,15 @@ async function configureReadProvider(){
     }
     await p.getBlockNumber();
     readProvider = p;
+    lastSuccessfulReadSource = providerLabelFromUrl(rpc);
+    if (el("activeReadRpc")) el("activeReadRpc").textContent = lastSuccessfulReadSource;
     return {source:"rpc", rpc};
   } catch (e) {
     if (el("readRpc")?.value?.trim()) throw e;
     // Automatic preset failed: safely fall back to wallet provider.
     readProvider = provider;
+    lastSuccessfulReadSource = "Wallet provider";
+    if (el("activeReadRpc")) el("activeReadRpc").textContent = lastSuccessfulReadSource;
     return {source:"wallet-fallback", rpc};
   }
 }
@@ -786,6 +834,98 @@ async function testReadRpc(){
   setStatus(el("loadStatus"), `Read RPC OK.\nSource: ${source}\nChain: ${chainInfo().name} (${chainId})\nLatest block: ${block.toLocaleString()}`, "ok");
 }
 
+
+function hexChainId(){ return "0x" + BigInt(chainId).toString(16); }
+
+async function detectWalletBatchCapabilities(){
+  walletCapabilities = null;
+  walletBatchSupported = false;
+  const option = el("walletBatchOption");
+  const info = el("walletBatchInfo");
+
+  try {
+    const raw = await window.ethereum.request({
+      method: "wallet_getCapabilities",
+      params: [account]
+    });
+
+    walletCapabilities = raw;
+    const hex = hexChainId();
+    const caps = raw?.[hex] || raw?.[hex.toLowerCase()] || raw?.[String(chainId)] || null;
+    const text = JSON.stringify(caps || {}).toLowerCase();
+
+    walletBatchSupported = !!caps && (
+      text.includes("atomic") ||
+      text.includes("batch") ||
+      text.includes("sendcalls")
+    );
+
+    option.disabled = !walletBatchSupported;
+    option.textContent = walletBatchSupported
+      ? "Wallet Batch — supported by connected wallet"
+      : "Wallet Batch — not advertised by connected wallet";
+
+    info.textContent = walletBatchSupported
+      ? `Wallet Batch capability detected on ${chainInfo().name}.`
+      : `Connected wallet did not advertise EIP-5792 batching on ${chainInfo().name}.`;
+
+    return walletBatchSupported;
+  } catch(e){
+    option.disabled = true;
+    option.textContent = "Wallet Batch — not supported";
+    info.textContent = `wallet_getCapabilities unavailable: ${extractErrorMessage(e)}`;
+    return false;
+  }
+}
+
+async function sendWalletBatchCalls(to, items){
+  if (!walletBatchSupported) throw new Error("Wallet Batch is not available on the connected wallet.");
+
+  const collection = el("collection").value.trim();
+  const iface = new ethers.Interface(ERC721_ABI);
+  const calls = items.map(item => ({
+    to: collection,
+    value: "0x0",
+    data: iface.encodeFunctionData(
+      "safeTransferFrom(address,address,uint256)",
+      [account, to, item.id]
+    )
+  }));
+
+  try {
+    return await window.ethereum.request({
+      method:"wallet_sendCalls",
+      params:[{
+        version:"2.0.0",
+        chainId:hexChainId(),
+        from:account,
+        atomicRequired:true,
+        calls
+      }]
+    });
+  } catch(first){
+    try {
+      return await window.ethereum.request({
+        method:"wallet_sendCalls",
+        params:[{chainId:hexChainId(),from:account,calls}]
+      });
+    } catch(second){
+      throw new Error(`Wallet Batch failed: ${extractErrorMessage(second)}`);
+    }
+  }
+}
+
+async function getWalletBatchStatus(id){
+  try {
+    return await window.ethereum.request({
+      method:"wallet_getCallsStatus",
+      params:[id]
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function connect(){
   if (!window.ethereum) throw new Error("No injected EVM wallet found. Install or open this page inside MetaMask, Rabby, Coinbase Wallet, etc.");
   provider = new ethers.BrowserProvider(window.ethereum);
@@ -794,9 +934,8 @@ async function connect(){
   account = await signer.getAddress();
   const network = await provider.getNetwork();
   chainId = Number(network.chainId);
-  const checkerDefaults = checkerConfig();
-  if (el("readBatchSize")) el("readBatchSize").value = String(checkerDefaults.batchSize);
   await configureReadProvider();
+  await detectWalletBatchCapabilities();
   applyConfiguredHelper();
   el("walletStat").textContent = short(account);
   el("walletStat").title = account;
@@ -811,9 +950,8 @@ async function refreshNetwork(){
   account = await signer.getAddress();
   const network = await provider.getNetwork();
   chainId = Number(network.chainId);
-  const checkerDefaults = checkerConfig();
-  if (el("readBatchSize")) el("readBatchSize").value = String(checkerDefaults.batchSize);
   await configureReadProvider();
+  await detectWalletBatchCapabilities();
   applyConfiguredHelper();
   el("walletStat").textContent = short(account);
   el("walletStat").title = account;
@@ -889,7 +1027,7 @@ function requestOwnershipCheckStop(){
   el("stopCheckBtn").disabled = true;
   setStatus(
     el("loadStatus"),
-    "Stop requested. Finishing the current contract-call batch, then the check will stop and keep any holdings already found.",
+    "Stop requested. Finishing the current contract/RPC batch, then the check will stop and keep any holdings already found.",
     "warn"
   );
 }
@@ -919,9 +1057,7 @@ async function loadERC721ByRange(address){
     throw new Error(`Requested range contains ${count} token IDs. Narrow the range to 100,000 IDs or fewer.`);
   }
 
-  const cfg = checkerConfig();
-  const requestedBatch = Number(el("readBatchSize").value || cfg.batchSize);
-  const batchSize = Math.max(1, Math.min(100, requestedBatch));
+  const batchSize = Math.max(1, Math.min(100, Number(el("readBatchSize").value || 20)));
   const owned = [];
   let checked = 0n;
 
@@ -936,25 +1072,13 @@ async function loadERC721ByRange(address){
 
     const results = await Promise.all(ids.map(async id => {
       try {
-        const owner = await withCheckerRetry(
-          () => c.ownerOf(id),
-          `token #${id}`
-        );
-
-        if (!owner) return null;
+        const owner = await c.ownerOf(id);
         return owner.toLowerCase() === account.toLowerCase() ? id : null;
-      } catch (error) {
+      } catch {
         // Nonexistent/burned IDs are expected on many collections.
-        // Preserve real RPC/rate-limit failures after retries.
-        if (isRateLimitError(error) || isFetchOrCorsError(error)) throw error;
         return null;
       }
     }));
-
-    const cfg = checkerConfig();
-    if (cfg.delayMs > 0 && !ownershipCheckStopRequested) {
-      await sleep(cfg.delayMs);
-    }
 
     owned.push(...results.filter(v => v !== null));
     checked += BigInt(ids.length);
@@ -968,7 +1092,7 @@ async function loadERC721ByRange(address){
     if (ownershipCheckStopRequested) break;
     setStatus(
       el("loadStatus"),
-      `Checking this collection contract only…\nToken IDs ${start} → ${end}\nChecked ${checked} / ${count} · Found ${owned.length} owned\nNonexistent / burned token IDs are skipped automatically.`,
+      `Checking this collection contract only…\nToken IDs ${start} → ${end}\nChecked ${checked} / ${count} · Found ${owned.length} owned`,
       "warn"
     );
   }
@@ -985,6 +1109,148 @@ async function loadERC721ByRange(address){
   }
   return finalOwned;
 }
+
+
+async function getContractLogsAdaptive(baseFilter, start, end, initialChunk, label){
+  let cursor = start;
+  let chunk = Math.max(100, initialChunk);
+  const logs = [];
+  beginOwnershipCheck();
+
+  while (cursor <= end){
+    if (ownershipCheckStopRequested) break;
+
+    const toBlock = Math.min(end, cursor + chunk - 1);
+
+    try {
+      const result = await getLogsWithProviderFallback(baseFilter, cursor, toBlock);
+      const part = result.logs;
+      logs.push(...part);
+      cursor = toBlock + 1;
+
+      setStatus(
+        el("loadStatus"),
+        `${label}\nBlocks ${start.toLocaleString()} → ${end.toLocaleString()}\nReached ${Math.min(cursor,end).toLocaleString()} · ${logs.length} matching events`,
+        "warn"
+      );
+
+      if (part.length < 100 && chunk < initialChunk){
+        chunk = Math.min(initialChunk, chunk * 2);
+      }
+    } catch(e){
+      if (chunk <= 100){
+        endOwnershipCheck();
+        throw new Error(`ERC-1155 contract event query failed at a 100-block window. ${extractErrorMessage(e)}\n\nTry another read-only RPC, use a later contract scan start block, or use Manual token IDs.`);
+      }
+      chunk = Math.max(100, Math.floor(chunk / 2));
+    }
+  }
+
+  return logs;
+}
+
+async function discoverERC1155Holdings(address){
+  const latest = await rp().getBlockNumber();
+  const start = Math.max(0, Number(el("erc1155StartBlock").value || 0));
+  const chunk = Math.max(100, Number(el("erc1155LogChunk").value || 20000));
+
+  if (start > latest){
+    throw new Error(`ERC-1155 start block ${start} is above current block ${latest}.`);
+  }
+
+  const iface = new ethers.Interface(ERC1155_ABI);
+  const singleTopic = iface.getEvent("TransferSingle").topicHash;
+  const batchTopic = iface.getEvent("TransferBatch").topicHash;
+  const acctTopic = topicAddress(account);
+
+  const queries = [
+    ["TransferSingle sent by wallet", {address, topics:[singleTopic, null, acctTopic]}],
+    ["TransferSingle received by wallet", {address, topics:[singleTopic, null, null, acctTopic]}],
+    ["TransferBatch sent by wallet", {address, topics:[batchTopic, null, acctTopic]}],
+    ["TransferBatch received by wallet", {address, topics:[batchTopic, null, null, acctTopic]}]
+  ];
+
+  const candidateIds = [];
+
+  for (const [label, filter] of queries){
+    if (ownershipCheckStopRequested) break;
+
+    const logs = await getContractLogsAdaptive(
+      filter,
+      start,
+      latest,
+      chunk,
+      `Scanning this ERC-1155 contract: ${label}…`
+    );
+
+    for (const log of logs){
+      try {
+        const parsed = iface.parseLog(log);
+
+        if (parsed.name === "TransferSingle"){
+          candidateIds.push(BigInt(parsed.args.id));
+        } else if (parsed.name === "TransferBatch"){
+          for (const id of parsed.args.ids){
+            candidateIds.push(BigInt(id));
+          }
+        }
+      } catch {}
+    }
+  }
+
+  const ids = uniqBigints(candidateIds);
+  const owned = [];
+  const contract = new ethers.Contract(address, ERC1155_ABI, rp());
+
+  for (let i = 0; i < ids.length; i += 100){
+    if (ownershipCheckStopRequested) break;
+
+    const slice = ids.slice(i, i + 100);
+    let balances;
+
+    try {
+      balances = await contract.balanceOfBatch(slice.map(() => account), slice);
+    } catch {
+      balances = await Promise.all(slice.map(id => contract.balanceOf(account, id)));
+    }
+
+    slice.forEach((id, j) => {
+      const balance = BigInt(balances[j]);
+      if (balance > 0n){
+        owned.push({id, balance, amount: balance, selected: false});
+      }
+    });
+
+    holdings = owned.slice().sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
+    renderHoldings();
+
+    setStatus(
+      el("loadStatus"),
+      `Verifying ERC-1155 balances…\nChecked ${Math.min(i+100, ids.length)} / ${ids.length} candidate token IDs · ${owned.length} currently owned`,
+      "warn"
+    );
+  }
+
+  const stopped = ownershipCheckStopRequested;
+  endOwnershipCheck();
+
+  if (stopped){
+    setStatus(
+      el("loadStatus"),
+      `ERC-1155 discovery stopped. Kept ${owned.length} currently-owned token ID${owned.length===1?"":"s"} found so far.`,
+      "warn"
+    );
+  } else {
+    setStatus(
+      el("loadStatus"),
+      `ERC-1155 auto-discovery complete. Found ${owned.length} currently-owned token ID${owned.length===1?"":"s"} in this collection.`,
+      "ok"
+    );
+  }
+
+  return owned;
+}
+
 
 async function loadERC1155ManualOnly(address){
   setStatus(
@@ -1076,7 +1342,7 @@ setStatus(el("loadStatus"), "Detecting NFT standard…");
     collectionContract = new ethers.Contract(address, ERC1155_ABI, signer);
     el("erc1155Controls").classList.remove("hidden");
     el("erc721Controls").classList.add("hidden");
-    holdings = await loadERC1155ManualOnly(address);
+    holdings = await discoverERC1155Holdings(address);
   }
 renderHoldings();
   enrichMetadata(address);
@@ -1458,11 +1724,13 @@ async function diagnoseSelectedTransfer(){
   }
 
   lines.push("");
+  lines.push(`Wallet Batch capability: ${walletBatchSupported ? "✓ AVAILABLE" : "✗ NOT ADVERTISED"}`);
+  lines.push("");
 
   if (!ownerMatches){
     lines.push("Diagnosis: the selected token is not currently owned by the connected wallet.");
   } else if (directOK && helperOK === false){
-    lines.push("Diagnosis: direct wallet transfer works, but the helper path reverts. This collection likely rejects or restricts approved-operator smart-contract transfers.");
+    lines.push(walletBatchSupported ? "Diagnosis: direct works, helper fails, and Wallet Batch is available. Use Wallet Batch for this collection." : "Diagnosis: direct works, helper fails, and this wallet does not advertise Wallet Batch.");
   } else if (!directOK && helperOK === false){
     lines.push("Diagnosis: both direct and helper simulations fail. The collection likely has a broader transfer restriction, paused state, destination restriction, or another custom rule.");
   } else if (directOK && helperOK){
@@ -1502,6 +1770,13 @@ async function preflight(){
         if (owner.toLowerCase() !== account.toLowerCase()) throw new Error(`Token #${item.id} is no longer owned by the connected wallet.`);
       }
       setStatus(el("transferStatus"), `Preflight passed for ${items.length} ERC-721 token${items.length===1?"":"s"}.\nDirect mode will request ${items.length} separate wallet transaction${items.length===1?"":"s"}.`, "ok");
+    } else if (mode === "walletbatch") {
+      if (!walletBatchSupported) throw new Error("Wallet Batch is not supported by the connected wallet on this chain.");
+      for (const item of items) {
+        const owner = await collectionContract.ownerOf(item.id);
+        if (owner.toLowerCase() !== account.toLowerCase()) throw new Error(`Token #${item.id} is no longer owned by the connected wallet.`);
+      }
+      setStatus(el("transferStatus"), `Wallet Batch preflight passed for ${items.length} ERC-721 tokens.`, "ok");
     } else {
       if (!helperVerified) throw new Error("Verify the helper contract before using batch-helper mode.");
       const helper = el("helperAddress").value.trim();
@@ -1541,6 +1816,16 @@ async function transfer(){
       holdings = holdings.filter(x=>!x._sent);
       renderHoldings();
       setStatus(el("transferStatus"), `Complete. ${completed} ERC-721 token${completed===1?"":"s"} transferred.`, "ok");
+    } else if (mode === "walletbatch") {
+      if (!walletBatchSupported) throw new Error("Wallet Batch is not supported by the connected wallet on this chain.");
+      setStatus(el("transferStatus"), `Submitting Wallet Batch with ${items.length} direct ERC-721 calls…`, "warn");
+      const result = await sendWalletBatchCalls(to, items);
+      const batchId = typeof result === "string" ? result : (result?.id || result?.batchId || JSON.stringify(result));
+      setStatus(el("transferStatus"), `Wallet Batch submitted.\nBatch ID: ${batchId}`, "ok");
+      if (typeof result === "string") {
+        const status = await getWalletBatchStatus(result);
+        if (status) el("transferStatus").textContent += `\nStatus: ${JSON.stringify(status)}`;
+      }
     } else {
       if (!helperVerified) throw new Error("Verify the helper first.");
       const helperAddr = el("helperAddress").value.trim();
@@ -1588,8 +1873,11 @@ el("loadBtn").addEventListener("click", wrap(loadCollection));
 el("stopCheckBtn").addEventListener("click", requestOwnershipCheckStop);
 el("manualBtn").addEventListener("click", wrap(loadManual));
 
+el("recheckWalletBatchBtn").addEventListener("click", wrap(detectWalletBatchCapabilities, el("transferStatus")));
 el("erc721Mode").addEventListener("change", ()=>{
-  el("helperControls").classList.toggle("hidden", el("erc721Mode").value !== "helper");
+  const mode = el("erc721Mode").value;
+  el("helperControls").classList.toggle("hidden", mode !== "helper");
+  el("walletBatchControls").classList.toggle("hidden", mode !== "walletbatch");
 });
 el("helperAddress").addEventListener("input", () => {
   helperVerified = false;

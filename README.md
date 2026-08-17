@@ -3,36 +3,33 @@
 v10 includes transfer diagnostics for ERC-721 helper troubleshooting.
 
 
-## v11 — Ethereum Mainnet helper
+## v11 — ERC-1155 auto-discovery
 
-- Ethereum Mainnet (1): `0x1D4671d55C894d2a166a0aDc9720faBb76f5FfB1`
-- Base (8453): `0x1d4f7624139d337A31cf08DB065Ec7F4Bd698C22`
-- Robinhood Chain (4663): `0x19466Dd578cAB78BfcC3f776531598c1473d32ab`
+ERC-1155 holdings are now discovered automatically by scanning only the selected collection contract's `TransferSingle` and `TransferBatch` events involving the connected wallet. Candidate token IDs are then verified with `balanceOfBatch()` so only current non-zero balances are shown.
 
-
-## v12 — Robinhood RPC throttling and fallback
-
-The collection checker is now rate-limit aware.
-
-On Robinhood Chain (4663), the checker defaults to:
-- 5 concurrent `ownerOf()` reads per batch
-- 250 ms delay between batches
-- exponential retry backoff on HTTP 429 / rate-limit errors
-- retry delays of roughly 0.5s, 1s, 2s, 4s, up to 8s
-- automatic fallback to the connected wallet provider when the direct read RPC is blocked by CORS or fails to fetch
-
-The Stop Check button remains cooperative: it stops after the current in-flight batch finishes and preserves holdings already found.
-
-For other chains, the default remains 20 reads per batch with no artificial delay unless the user changes the batch-size field.
+This is contract-scoped discovery, not a scan of unrelated contracts or general blockchain activity. Manual token IDs remain available as a fallback.
 
 
-## v13 — nonexistent ERC-721 token handling
+## v12 — automatic RPC failover
 
-Some ERC-721 collections have gaps, burned token IDs, reserved ranges, or IDs that were never minted. Calling `ownerOf()` on those IDs is expected to revert.
+ERC-1155 contract-scoped log discovery now rotates through available providers automatically.
 
-v13 explicitly recognizes and skips common nonexistent-token custom errors:
+Priority:
+1. user-supplied Read-only RPC override
+2. configured/default read provider
+3. connected wallet provider
+4. known public fallbacks for the connected chain
 
-- `0xdf2d9b42` — ERC721A `OwnerQueryForNonexistentToken()`
-- `0x7e273289` — OpenZeppelin v5 `ERC721NonexistentToken(uint256)`
+Ethereum mainnet public fallbacks:
+- PublicNode Ethereum
+- Cloudflare Ethereum Gateway
 
-These reverts are now treated as a normal "token does not exist" result inside the checker rather than a failed batch or RPC error.
+Base public fallbacks:
+- Base official public RPC
+- PublicNode Base
+
+The UI displays the read provider that most recently succeeded. If a provider returns 401/403, CORS/fetch failures, RPC errors, or refuses `eth_getLogs`, the app tries the next provider before shrinking the block window or giving up.
+
+## v13 — Wallet Batch
+
+Adds EIP-5792 capability detection with `wallet_getCapabilities`, an optional Wallet Batch transfer mode using `wallet_sendCalls`, and status lookup through `wallet_getCallsStatus`. Wallet Batch remains disabled when the connected wallet does not advertise support.
