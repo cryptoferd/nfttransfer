@@ -128,7 +128,7 @@
       <h1>EVM NFT Bulk Transfer</h1>
       <div class="sub">A local, wallet-connected utility for finding ERC-721 / ERC-1155 holdings in a collection and moving selected assets to another wallet. No private keys are requested or stored.</div>
     </div>
-    <div class="badge">v13 · client-side only</div>
+    <div class="badge">v14 · client-side only</div>
   </div>
 
   <div class="grid">
@@ -380,7 +380,6 @@ const EXPECTED_MAGIC = ethers.id("EVM_NFT_BULK_SENDER_V1");
 
 
 const READ_RPC_PRESETS = {
-  4663: "https://rpc.mainnet.chain.robinhood.com",
   1: "https://ethereum-rpc.publicnode.com",
   10: "https://optimism-rpc.publicnode.com",
   56: "https://bsc-rpc.publicnode.com",
@@ -414,9 +413,6 @@ const FALLBACK_RPC_POOLS = {
   43114: [
     {name:"PublicNode Avalanche", url:"https://avalanche-c-chain-rpc.publicnode.com"}
   ],
-  4663: [
-    {name:"Robinhood Official", url:"https://rpc.mainnet.chain.robinhood.com"}
-  ]
 };
 
 
@@ -700,7 +696,7 @@ async function buildReadProviderCandidates(){
   // Wallet provider is intentionally included before public fallbacks.
   if (provider) add("Wallet provider", provider, null);
 
-  const pool = FALLBACK_RPC_POOLS[chainId] || [];
+  const pool = chainPrefersWalletReads() ? [] : (FALLBACK_RPC_POOLS[chainId] || []);
   for (const item of pool) {
     try {
       add(item.name, await makeStaticJsonProvider(item.url), item.url);
@@ -750,16 +746,41 @@ async function getLogsWithProviderFallback(filter, fromBlock, toBlock){
 }
 
 
+
+function chainPrefersWalletReads(){
+  // Robinhood's public RPC currently rejects some cross-origin browser
+  // requests and can rate-limit app traffic. Use the extension provider
+  // unless the user explicitly supplies a browser-capable RPC endpoint.
+  return Number(chainId) === 4663;
+}
+
 function preferredReadRpc(){
   const manual = el("readRpc")?.value?.trim();
   if (manual) return manual;
+  if (chainPrefersWalletReads()) return null;
   return READ_RPC_PRESETS[chainId] || null;
 }
+
+function updateReadRpcHint(){
+  const input = el("readRpc");
+  if (!input) return;
+
+  if (Number(chainId) === 4663) {
+    input.placeholder = "Optional: https://robinhood-mainnet.g.alchemy.com/v2/YOUR_API_KEY";
+    input.title = "Robinhood Chain defaults to the connected wallet provider to avoid public-RPC browser CORS/rate-limit issues.";
+  } else {
+    input.placeholder = "Leave blank to use automatic/default RPC";
+    input.title = "";
+  }
+}
+
 async function configureReadProvider(){
   const rpc = preferredReadRpc();
   if (!rpc) {
     readProvider = provider;
-    lastSuccessfulReadSource = "Wallet provider";
+    lastSuccessfulReadSource = chainPrefersWalletReads()
+      ? "Wallet provider (browser-safe)"
+      : "Wallet provider";
     if (el("activeReadRpc")) el("activeReadRpc").textContent = lastSuccessfulReadSource;
     return {source:"wallet", rpc:null};
   }
@@ -934,6 +955,7 @@ async function connect(){
   account = await signer.getAddress();
   const network = await provider.getNetwork();
   chainId = Number(network.chainId);
+  updateReadRpcHint();
   await configureReadProvider();
   await detectWalletBatchCapabilities();
   applyConfiguredHelper();
@@ -950,6 +972,7 @@ async function refreshNetwork(){
   account = await signer.getAddress();
   const network = await provider.getNetwork();
   chainId = Number(network.chainId);
+  updateReadRpcHint();
   await configureReadProvider();
   await detectWalletBatchCapabilities();
   applyConfiguredHelper();

@@ -33,3 +33,21 @@ The UI displays the read provider that most recently succeeded. If a provider re
 ## v13 — Wallet Batch
 
 Adds EIP-5792 capability detection with `wallet_getCapabilities`, an optional Wallet Batch transfer mode using `wallet_sendCalls`, and status lookup through `wallet_getCallsStatus`. Wallet Batch remains disabled when the connected wallet does not advertise support.
+
+
+## v14 — Robinhood browser RPC fix
+
+Robinhood Chain (4663) no longer uses `https://rpc.mainnet.chain.robinhood.com`
+as a direct browser-side JSON-RPC endpoint.
+
+Why:
+- direct requests from GitHub Pages can be rejected by the endpoint's CORS response
+- the public endpoint can return HTTP 429 under application-style request volume
+
+New behavior on Robinhood Chain:
+1. connected wallet provider is the default read provider
+2. the Robinhood public endpoint is removed from automatic browser fallback
+3. a user-supplied Read-only RPC override still works
+4. the UI suggests an Alchemy Robinhood endpoint format when an external RPC is desired
+
+Transactions are still signed only by the connected wallet.
